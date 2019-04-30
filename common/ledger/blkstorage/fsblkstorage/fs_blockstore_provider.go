@@ -22,6 +22,8 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 )
 
+//FsBlockstoreProvider结构体实现了一些接口
+
 // FsBlockstoreProvider provides handle to block storage - this is not thread-safe
 type FsBlockstoreProvider struct {
 	conf            *Conf

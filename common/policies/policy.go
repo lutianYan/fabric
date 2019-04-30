@@ -10,12 +10,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/flogging"
 	cb "github.com/hyperledger/fabric/protos/common"
+
+	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/protos/msp"
+	"github.com/op/go-logging"
 	"github.com/pkg/errors"
-	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -112,6 +113,7 @@ func (ps PrincipalSet) UniqueSet() map[*msp.MSPPrincipal]int {
 
 // Policy is used to determine if a signature is valid
 type Policy interface {
+	//对给定的签名数据，按照规则检验确认是否符合约定的条件
 	// Evaluate takes a set of SignedData and evaluates whether this set of signatures satisfies the policy
 	Evaluate(signatureSet []*cb.SignedData) error
 }
@@ -154,6 +156,7 @@ type ManagerImpl struct {
 	managers map[string]*ManagerImpl
 }
 
+//构造ManagerImpl
 // NewManagerImpl creates a new ManagerImpl with the given CryptoHelper
 func NewManagerImpl(path string, providers map[int32]Provider, root *cb.ConfigGroup) (*ManagerImpl, error) {
 	var err error
@@ -223,6 +226,7 @@ func (rp rejectPolicy) Evaluate(signedData []*cb.SignedData) error {
 	return fmt.Errorf("No such policy: '%s'", rp)
 }
 
+//获取指定路径的子管理器
 // Manager returns the sub-policy manager for a given path and whether it exists
 func (pm *ManagerImpl) Manager(path []string) (Manager, bool) {
 	logger.Debugf("Manager %s looking up path %v", pm.path, path)
@@ -247,7 +251,7 @@ type policyLogger struct {
 }
 
 func (pl *policyLogger) Evaluate(signatureSet []*cb.SignedData) error {
-	if logger.IsEnabledFor(zapcore.DebugLevel) {
+	if logger.IsEnabledFor(logging.DEBUG) {
 		logger.Debugf("== Evaluating %T Policy %s ==", pl.policy, pl.policyName)
 		defer logger.Debugf("== Done Evaluating %T Policy %s", pl.policy, pl.policyName)
 	}
@@ -271,7 +275,9 @@ func (pm *ManagerImpl) GetPolicy(id string) (Policy, bool) {
 
 	if strings.HasPrefix(id, PathSeparator) {
 		if !strings.HasPrefix(id, PathSeparator+pm.path) {
-			logger.Debugf("Requested absolute policy %s from %s, returning rejectAll", id, pm.path)
+			if logger.IsEnabledFor(logging.DEBUG) {
+				logger.Debugf("Requested absolute policy %s from %s, returning rejectAll", id, pm.path)
+			}
 			return rejectPolicy(id), false
 		}
 		// strip off the leading slash, the path, and the trailing slash
@@ -282,7 +288,9 @@ func (pm *ManagerImpl) GetPolicy(id string) (Policy, bool) {
 
 	policy, ok := pm.policies[relpath]
 	if !ok {
-		logger.Debugf("Returning dummy reject all policy because %s could not be found in %s/%s", id, pm.path, relpath)
+		if logger.IsEnabledFor(logging.DEBUG) {
+			logger.Debugf("Returning dummy reject all policy because %s could not be found in %s/%s", id, pm.path, relpath)
+		}
 		return rejectPolicy(relpath), false
 	}
 

@@ -1,13 +1,25 @@
 /*
-Copyright IBM Corp. All Rights Reserved.
+Copyright IBM Corp. 2016 All Rights Reserved.
 
-SPDX-License-Identifier: Apache-2.0
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+		 http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
-
+//为区块文件建立索引 加速搜索的功能
+//索引自身也有一个检查点indexcheckpoint，用于记录当前最新的block数据包的索引的存储情况
 package fsblkstorage
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/golang/protobuf/proto"
@@ -17,7 +29,6 @@ import (
 	ledgerUtil "github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/peer"
-	"github.com/pkg/errors"
 )
 
 const (
@@ -25,9 +36,9 @@ const (
 	blockHashIdxKeyPrefix          = 'h'
 	txIDIdxKeyPrefix               = 't'
 	blockNumTranNumIdxKeyPrefix    = 'a'
-	blockTxIDIdxKeyPrefix          = 'b'
+	blockTxIDIdxKeyPrefix           = 'b'
 	txValidationResultIdxKeyPrefix = 'v'
-	indexCheckpointKeyStr          = "indexCheckpointKey"
+	indexCheckpointKeyStr          = "indexCheckpointKey" //索引自身也有一个检查点，用于记录当前最新的block数据包的索引的存储情况
 )
 
 var indexCheckpointKey = []byte(indexCheckpointKeyStr)
@@ -48,10 +59,14 @@ type blockIdxInfo struct {
 	blockNum  uint64
 	blockHash []byte
 	flp       *fileLocPointer
-	txOffsets []*txindexInfo
+	//这个成员在计算每笔交易在blockfile中的偏移位置时，随着添加A+B，总共经历了三轮，首先计算的是每笔交易在B中的相对偏移，然后计算的是每笔交易在A+B中的相对偏移，最后计算的是每笔交易在blockfile中的偏移。
+	txOffsets []*txindexInfo //block块中每笔具体交易数据的索引
 	metadata  *common.BlockMetadata
 }
 
+//每在blockfile中存储一个block数据包，都会在leveldb中存储与该block数据包对应的索引
+//索引分别以block序列号，block的hash值和交易id等为key，以账本中最新的block的位置信息等为value，组成一批键值对，并存储在leveldb中
+//索引的key值预定义在blockstorage.go中，主要是为调用者提供多种索引方式以在blockfile中定位block块数据
 type blockIndex struct {
 	indexItemsMap map[blkstorage.IndexableAttr]bool
 	db            *leveldbhelper.DBHandle
@@ -69,7 +84,7 @@ func newBlockIndex(indexConfig *blkstorage.IndexConfig, db *leveldbhelper.DBHand
 	// for efficiency purpose - [FAB-10587]
 	if (indexItemsMap[blkstorage.IndexableAttrTxValidationCode] || indexItemsMap[blkstorage.IndexableAttrBlockTxID]) &&
 		!indexItemsMap[blkstorage.IndexableAttrTxID] {
-		return nil, errors.Errorf("dependent index [%s] is not enabled for [%s] or [%s]",
+		return nil, fmt.Errorf("dependent index [%s] is not enabled for [%s] or [%s]",
 			blkstorage.IndexableAttrTxID, blkstorage.IndexableAttrTxValidationCode, blkstorage.IndexableAttrBlockTxID)
 	}
 	return &blockIndex{indexItemsMap, db}, nil
@@ -86,7 +101,7 @@ func (index *blockIndex) getLastBlockIndexed() (uint64, error) {
 	}
 	return decodeBlockNum(blockNumBytes), nil
 }
-
+//以批量写入的形式将各个索引对应的信息写入leveldb中
 func (index *blockIndex) indexBlock(blockIdxInfo *blockIdxInfo) error {
 	// do not index anything
 	if len(index.indexItemsMap) == 0 {
@@ -102,22 +117,25 @@ func (index *blockIndex) indexBlock(blockIdxInfo *blockIdxInfo) error {
 	if err != nil {
 		return err
 	}
-
+	//每次更新均会覆盖旧的值。
 	//Index1
+	//根据hash值构建区块索引
 	if _, ok := index.indexItemsMap[blkstorage.IndexableAttrBlockHash]; ok {
 		batch.Put(constructBlockHashKey(blockIdxInfo.blockHash), flpBytes)
 	}
 
 	//Index2
+	//根据区块编号构建区块索引
 	if _, ok := index.indexItemsMap[blkstorage.IndexableAttrBlockNum]; ok {
 		batch.Put(constructBlockNumKey(blockIdxInfo.blockNum), flpBytes)
 	}
 
 	//Index3 Used to find a transaction by it's transaction id
+	//根据每个交易的id构建索引
 	if _, ok := index.indexItemsMap[blkstorage.IndexableAttrTxID]; ok {
 		if err = index.markDuplicateTxids(blockIdxInfo); err != nil {
-			logger.Errorf("error detecting duplicate txids: %s", err)
-			return errors.WithMessage(err, "error detecting duplicate txids")
+			logger.Errorf("error while detecting duplicate txids:%s", err)
+			return err
 		}
 		for _, txoffset := range txOffsets {
 			if txoffset.isDuplicate { // do not overwrite txid entry in the index - FAB-8557
@@ -135,6 +153,7 @@ func (index *blockIndex) indexBlock(blockIdxInfo *blockIdxInfo) error {
 	}
 
 	//Index4 - Store BlockNumTranNum will be used to query history data
+	//查询历史数据
 	if _, ok := index.indexItemsMap[blkstorage.IndexableAttrBlockNumTranNum]; ok {
 		for txIterator, txoffset := range txOffsets {
 			txFlp := newFileLocationPointer(flp.fileSuffixNum, flp.offset, txoffset.loc)
@@ -148,6 +167,7 @@ func (index *blockIndex) indexBlock(blockIdxInfo *blockIdxInfo) error {
 	}
 
 	// Index5 - Store BlockNumber will be used to find block by transaction id
+	//通过交易id查找区块
 	if _, ok := index.indexItemsMap[blkstorage.IndexableAttrBlockTxID]; ok {
 		for _, txoffset := range txOffsets {
 			if txoffset.isDuplicate { // do not overwrite txid entry in the index - FAB-8557
@@ -158,6 +178,7 @@ func (index *blockIndex) indexBlock(blockIdxInfo *blockIdxInfo) error {
 	}
 
 	// Index6 - Store transaction validation result by transaction id
+	//通过交易id来存储交易验证结果
 	if _, ok := index.indexItemsMap[blkstorage.IndexableAttrTxValidationCode]; ok {
 		for idx, txoffset := range txOffsets {
 			if txoffset.isDuplicate { // do not overwrite txid entry in the index - FAB-8557
@@ -289,7 +310,7 @@ func (index *blockIndex) getTxValidationCodeByTxID(txID string) (peer.TxValidati
 	} else if raw == nil {
 		return peer.TxValidationCode(-1), blkstorage.ErrNotFoundInIndex
 	} else if len(raw) != 1 {
-		return peer.TxValidationCode(-1), errors.New("invalid value in indexItems")
+		return peer.TxValidationCode(-1), errors.New("Invalid value in indexItems")
 	}
 
 	result := peer.TxValidationCode(int32(raw[0]))
@@ -335,8 +356,8 @@ func decodeBlockNum(blockNumBytes []byte) uint64 {
 }
 
 type locPointer struct {
-	offset      int
-	bytesLength int
+	offset      int //记录数据在blockfile文件中的偏移，也就是数据从哪个位置开始的
+	bytesLength int //记录数据的大小（这个字段中，block数据包未使用，因为其长度存放在A中，没有必要使用这个字段。而交易数据使用了这个字段，来记录每个交易数据的大小）
 }
 
 func (lp *locPointer) String() string {
@@ -345,8 +366,9 @@ func (lp *locPointer) String() string {
 }
 
 // fileLocPointer
+//block数据包或者交易数据的位置信息
 type fileLocPointer struct {
-	fileSuffixNum int
+	fileSuffixNum int //记录数据所在的blockfile文件的后缀
 	locPointer
 }
 

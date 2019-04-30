@@ -59,10 +59,7 @@ func NewCA(baseDir, org, name, country, province, locality, orgUnit, streetAddre
 				template.KeyUsage |= x509.KeyUsageDigitalSignature |
 					x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign |
 					x509.KeyUsageCRLSign
-				template.ExtKeyUsage = []x509.ExtKeyUsage{
-					x509.ExtKeyUsageClientAuth,
-					x509.ExtKeyUsageServerAuth,
-				}
+				template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageAny}
 
 				//set the organization for the subject
 				subject := subjectTemplateAdditional(country, province, locality, orgUnit, streetAddress, postalCode)
@@ -173,8 +170,8 @@ func x509Template() x509.Certificate {
 
 	// set expiry to around 10 years
 	expiry := 3650 * 24 * time.Hour
-	// round minute and backdate 5 minutes
-	notBefore := time.Now().Round(time.Minute).Add(-5 * time.Minute).UTC()
+	// backdate 5 min
+	notBefore := time.Now().Add(-5 * time.Minute).UTC()
 
 	//basic template to use
 	x509 := x509.Certificate{

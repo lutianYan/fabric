@@ -2,28 +2,17 @@
 package mock
 
 import (
-	sync "sync"
+	"sync"
 
-	deliver "github.com/hyperledger/fabric/common/deliver"
-	common "github.com/hyperledger/fabric/protos/common"
+	"github.com/hyperledger/fabric/common/deliver"
+	cb "github.com/hyperledger/fabric/protos/common"
 )
 
 type ResponseSender struct {
-	SendBlockResponseStub        func(*common.Block) error
-	sendBlockResponseMutex       sync.RWMutex
-	sendBlockResponseArgsForCall []struct {
-		arg1 *common.Block
-	}
-	sendBlockResponseReturns struct {
-		result1 error
-	}
-	sendBlockResponseReturnsOnCall map[int]struct {
-		result1 error
-	}
-	SendStatusResponseStub        func(common.Status) error
+	SendStatusResponseStub        func(status cb.Status) error
 	sendStatusResponseMutex       sync.RWMutex
 	sendStatusResponseArgsForCall []struct {
-		arg1 common.Status
+		status cb.Status
 	}
 	sendStatusResponseReturns struct {
 		result1 error
@@ -31,86 +20,36 @@ type ResponseSender struct {
 	sendStatusResponseReturnsOnCall map[int]struct {
 		result1 error
 	}
+	SendBlockResponseStub        func(block *cb.Block) error
+	sendBlockResponseMutex       sync.RWMutex
+	sendBlockResponseArgsForCall []struct {
+		block *cb.Block
+	}
+	sendBlockResponseReturns struct {
+		result1 error
+	}
+	sendBlockResponseReturnsOnCall map[int]struct {
+		result1 error
+	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *ResponseSender) SendBlockResponse(arg1 *common.Block) error {
-	fake.sendBlockResponseMutex.Lock()
-	ret, specificReturn := fake.sendBlockResponseReturnsOnCall[len(fake.sendBlockResponseArgsForCall)]
-	fake.sendBlockResponseArgsForCall = append(fake.sendBlockResponseArgsForCall, struct {
-		arg1 *common.Block
-	}{arg1})
-	fake.recordInvocation("SendBlockResponse", []interface{}{arg1})
-	fake.sendBlockResponseMutex.Unlock()
-	if fake.SendBlockResponseStub != nil {
-		return fake.SendBlockResponseStub(arg1)
-	}
-	if specificReturn {
-		return ret.result1
-	}
-	fakeReturns := fake.sendBlockResponseReturns
-	return fakeReturns.result1
-}
-
-func (fake *ResponseSender) SendBlockResponseCallCount() int {
-	fake.sendBlockResponseMutex.RLock()
-	defer fake.sendBlockResponseMutex.RUnlock()
-	return len(fake.sendBlockResponseArgsForCall)
-}
-
-func (fake *ResponseSender) SendBlockResponseCalls(stub func(*common.Block) error) {
-	fake.sendBlockResponseMutex.Lock()
-	defer fake.sendBlockResponseMutex.Unlock()
-	fake.SendBlockResponseStub = stub
-}
-
-func (fake *ResponseSender) SendBlockResponseArgsForCall(i int) *common.Block {
-	fake.sendBlockResponseMutex.RLock()
-	defer fake.sendBlockResponseMutex.RUnlock()
-	argsForCall := fake.sendBlockResponseArgsForCall[i]
-	return argsForCall.arg1
-}
-
-func (fake *ResponseSender) SendBlockResponseReturns(result1 error) {
-	fake.sendBlockResponseMutex.Lock()
-	defer fake.sendBlockResponseMutex.Unlock()
-	fake.SendBlockResponseStub = nil
-	fake.sendBlockResponseReturns = struct {
-		result1 error
-	}{result1}
-}
-
-func (fake *ResponseSender) SendBlockResponseReturnsOnCall(i int, result1 error) {
-	fake.sendBlockResponseMutex.Lock()
-	defer fake.sendBlockResponseMutex.Unlock()
-	fake.SendBlockResponseStub = nil
-	if fake.sendBlockResponseReturnsOnCall == nil {
-		fake.sendBlockResponseReturnsOnCall = make(map[int]struct {
-			result1 error
-		})
-	}
-	fake.sendBlockResponseReturnsOnCall[i] = struct {
-		result1 error
-	}{result1}
-}
-
-func (fake *ResponseSender) SendStatusResponse(arg1 common.Status) error {
+func (fake *ResponseSender) SendStatusResponse(status cb.Status) error {
 	fake.sendStatusResponseMutex.Lock()
 	ret, specificReturn := fake.sendStatusResponseReturnsOnCall[len(fake.sendStatusResponseArgsForCall)]
 	fake.sendStatusResponseArgsForCall = append(fake.sendStatusResponseArgsForCall, struct {
-		arg1 common.Status
-	}{arg1})
-	fake.recordInvocation("SendStatusResponse", []interface{}{arg1})
+		status cb.Status
+	}{status})
+	fake.recordInvocation("SendStatusResponse", []interface{}{status})
 	fake.sendStatusResponseMutex.Unlock()
 	if fake.SendStatusResponseStub != nil {
-		return fake.SendStatusResponseStub(arg1)
+		return fake.SendStatusResponseStub(status)
 	}
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.sendStatusResponseReturns
-	return fakeReturns.result1
+	return fake.sendStatusResponseReturns.result1
 }
 
 func (fake *ResponseSender) SendStatusResponseCallCount() int {
@@ -119,22 +58,13 @@ func (fake *ResponseSender) SendStatusResponseCallCount() int {
 	return len(fake.sendStatusResponseArgsForCall)
 }
 
-func (fake *ResponseSender) SendStatusResponseCalls(stub func(common.Status) error) {
-	fake.sendStatusResponseMutex.Lock()
-	defer fake.sendStatusResponseMutex.Unlock()
-	fake.SendStatusResponseStub = stub
-}
-
-func (fake *ResponseSender) SendStatusResponseArgsForCall(i int) common.Status {
+func (fake *ResponseSender) SendStatusResponseArgsForCall(i int) cb.Status {
 	fake.sendStatusResponseMutex.RLock()
 	defer fake.sendStatusResponseMutex.RUnlock()
-	argsForCall := fake.sendStatusResponseArgsForCall[i]
-	return argsForCall.arg1
+	return fake.sendStatusResponseArgsForCall[i].status
 }
 
 func (fake *ResponseSender) SendStatusResponseReturns(result1 error) {
-	fake.sendStatusResponseMutex.Lock()
-	defer fake.sendStatusResponseMutex.Unlock()
 	fake.SendStatusResponseStub = nil
 	fake.sendStatusResponseReturns = struct {
 		result1 error
@@ -142,8 +72,6 @@ func (fake *ResponseSender) SendStatusResponseReturns(result1 error) {
 }
 
 func (fake *ResponseSender) SendStatusResponseReturnsOnCall(i int, result1 error) {
-	fake.sendStatusResponseMutex.Lock()
-	defer fake.sendStatusResponseMutex.Unlock()
 	fake.SendStatusResponseStub = nil
 	if fake.sendStatusResponseReturnsOnCall == nil {
 		fake.sendStatusResponseReturnsOnCall = make(map[int]struct {
@@ -155,13 +83,61 @@ func (fake *ResponseSender) SendStatusResponseReturnsOnCall(i int, result1 error
 	}{result1}
 }
 
+func (fake *ResponseSender) SendBlockResponse(block *cb.Block) error {
+	fake.sendBlockResponseMutex.Lock()
+	ret, specificReturn := fake.sendBlockResponseReturnsOnCall[len(fake.sendBlockResponseArgsForCall)]
+	fake.sendBlockResponseArgsForCall = append(fake.sendBlockResponseArgsForCall, struct {
+		block *cb.Block
+	}{block})
+	fake.recordInvocation("SendBlockResponse", []interface{}{block})
+	fake.sendBlockResponseMutex.Unlock()
+	if fake.SendBlockResponseStub != nil {
+		return fake.SendBlockResponseStub(block)
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	return fake.sendBlockResponseReturns.result1
+}
+
+func (fake *ResponseSender) SendBlockResponseCallCount() int {
+	fake.sendBlockResponseMutex.RLock()
+	defer fake.sendBlockResponseMutex.RUnlock()
+	return len(fake.sendBlockResponseArgsForCall)
+}
+
+func (fake *ResponseSender) SendBlockResponseArgsForCall(i int) *cb.Block {
+	fake.sendBlockResponseMutex.RLock()
+	defer fake.sendBlockResponseMutex.RUnlock()
+	return fake.sendBlockResponseArgsForCall[i].block
+}
+
+func (fake *ResponseSender) SendBlockResponseReturns(result1 error) {
+	fake.SendBlockResponseStub = nil
+	fake.sendBlockResponseReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *ResponseSender) SendBlockResponseReturnsOnCall(i int, result1 error) {
+	fake.SendBlockResponseStub = nil
+	if fake.sendBlockResponseReturnsOnCall == nil {
+		fake.sendBlockResponseReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.sendBlockResponseReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
 func (fake *ResponseSender) Invocations() map[string][][]interface{} {
 	fake.invocationsMutex.RLock()
 	defer fake.invocationsMutex.RUnlock()
-	fake.sendBlockResponseMutex.RLock()
-	defer fake.sendBlockResponseMutex.RUnlock()
 	fake.sendStatusResponseMutex.RLock()
 	defer fake.sendStatusResponseMutex.RUnlock()
+	fake.sendBlockResponseMutex.RLock()
+	defer fake.sendBlockResponseMutex.RUnlock()
 	copiedInvocations := map[string][][]interface{}{}
 	for key, value := range fake.invocations {
 		copiedInvocations[key] = value

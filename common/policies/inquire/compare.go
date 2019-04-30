@@ -8,6 +8,7 @@ package inquire
 
 import (
 	"bytes"
+
 	"fmt"
 
 	"github.com/golang/protobuf/proto"

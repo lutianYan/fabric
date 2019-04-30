@@ -11,6 +11,8 @@ import (
 
 	"github.com/hyperledger/fabric/common/policies"
 	cb "github.com/hyperledger/fabric/protos/common"
+	"github.com/hyperledger/fabric/protos/utils"
+
 	"github.com/pkg/errors"
 )
 
@@ -22,7 +24,7 @@ func (vi *ValidatorImpl) verifyReadSet(readSet map[string]comparable) error {
 		}
 
 		if existing.version() != value.version() {
-			return errors.Errorf("proposed update requires that key %s be at version %d, but it is currently at version %d", key, value.version(), existing.version())
+			return errors.Errorf("readset expected key %s at version %d, but got version %d", key, value.version(), existing.version())
 		}
 	}
 	return nil
@@ -122,7 +124,7 @@ func (vi *ValidatorImpl) authorizeUpdate(configUpdateEnv *cb.ConfigUpdateEnvelop
 	}
 
 	if configUpdate.ChannelId != vi.channelID {
-		return nil, errors.Errorf("ConfigUpdate for channel '%s' but envelope for channel '%s'", configUpdate.ChannelId, vi.channelID)
+		return nil, errors.Errorf("Update not for correct channel: %s for %s", configUpdate.ChannelId, vi.channelID)
 	}
 
 	readSet, err := mapConfig(configUpdate.ReadSet, vi.namespace)
@@ -199,4 +201,13 @@ func (vi *ValidatorImpl) computeUpdateResult(updatedConfig map[string]comparable
 		newConfigMap[key] = value
 	}
 	return newConfigMap
+}
+
+func envelopeToConfigUpdate(configtx *cb.Envelope) (*cb.ConfigUpdateEnvelope, error) {
+	configUpdateEnv := &cb.ConfigUpdateEnvelope{}
+	_, err := utils.UnmarshalEnvelopeOfTypes(configtx, []cb.HeaderType{cb.HeaderType_CONFIG_UPDATE}, configUpdateEnv)
+	if err != nil {
+		return nil, err
+	}
+	return configUpdateEnv, nil
 }

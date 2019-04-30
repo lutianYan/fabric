@@ -7,12 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 package idemixca
 
 import (
-	"crypto/x509"
-	"encoding/pem"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"crypto/x509"
+
+	"encoding/pem"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/idemix"
@@ -45,13 +47,13 @@ func TestIdemixCa(t *testing.T) {
 
 	key := &idemix.IssuerKey{Isk: isk, Ipk: ipk}
 
-	conf, err := GenerateSignerConfig(m.GetRoleMaskFromIdemixRole(m.MEMBER), "OU1", "enrollmentid1", 1, key, revocationkey)
+	conf, err := GenerateSignerConfig(false, "OU1", "enrollmentid1", 1, key, revocationkey)
 	assert.NoError(t, err)
 	cleanupSigner()
 	assert.NoError(t, writeSignerToFile(conf))
 	assert.NoError(t, setupMSP())
 
-	conf, err = GenerateSignerConfig(m.GetRoleMaskFromIdemixRole(m.ADMIN), "OU1", "enrollmentid2", 1234, key, revocationkey)
+	conf, err = GenerateSignerConfig(true, "OU1", "enrollmentid2", 1234, key, revocationkey)
 	assert.NoError(t, err)
 	cleanupSigner()
 	assert.NoError(t, writeSignerToFile(conf))
@@ -61,10 +63,10 @@ func TestIdemixCa(t *testing.T) {
 	cleanupVerifier()
 	assert.Error(t, setupMSP())
 
-	_, err = GenerateSignerConfig(m.GetRoleMaskFromIdemixRole(m.ADMIN), "", "enrollmentid", 1, key, revocationkey)
+	_, err = GenerateSignerConfig(true, "", "enrollmentid", 1, key, revocationkey)
 	assert.EqualError(t, err, "the OU attribute value is empty")
 
-	_, err = GenerateSignerConfig(m.GetRoleMaskFromIdemixRole(m.ADMIN), "OU1", "", 1, key, revocationkey)
+	_, err = GenerateSignerConfig(true, "OU1", "", 1, key, revocationkey)
 	assert.EqualError(t, err, "the enrollment id value is empty")
 }
 

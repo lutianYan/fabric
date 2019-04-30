@@ -21,7 +21,7 @@ import (
 	"github.com/hyperledger/fabric/protos/utils"
 )
 
-var logger = flogging.MustGetLogger("common.configtx.test")
+var logger = flogging.MustGetLogger("common/configtx/test")
 
 // MakeGenesisBlock creates a genesis block using the test templates for the given chainID
 func MakeGenesisBlock(chainID string) (*cb.Block, error) {
@@ -31,9 +31,9 @@ func MakeGenesisBlock(chainID string) (*cb.Block, error) {
 		logger.Panicf("Error creating channel config: %s", err)
 	}
 
-	gb := genesis.NewFactoryImpl(channelGroup).Block(chainID)
-	if gb == nil {
-		return gb, nil
+	gb, err := genesis.NewFactoryImpl(channelGroup).Block(chainID)
+	if err != nil || gb == nil {
+		return gb, err
 	}
 
 	txsFilter := util.NewTxValidationFlagsSetValue(len(gb.Data.Data), peer.TxValidationCode_VALID)
@@ -72,5 +72,5 @@ func MakeGenesisBlockFromMSPs(chainID string, appMSPConf, ordererMSPConf *msppro
 	channelGroup.Groups[channelconfig.OrdererGroupKey].Groups[ordererOrgID] = ordererOrg
 	channelGroup.Groups[channelconfig.ApplicationGroupKey].Groups[appOrgID] = applicationOrg
 
-	return genesis.NewFactoryImpl(channelGroup).Block(chainID), nil
+	return genesis.NewFactoryImpl(channelGroup).Block(chainID)
 }

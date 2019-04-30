@@ -31,7 +31,7 @@ const (
 // Factory facilitates the creation of genesis blocks.
 type Factory interface {
 	// Block returns a genesis block for a given channel ID.
-	Block(channelID string) *cb.Block
+	Block(channelID string) (*cb.Block, error)
 }
 
 type factory struct {
@@ -44,7 +44,7 @@ func NewFactoryImpl(channelGroup *cb.ConfigGroup) Factory {
 }
 
 // Block constructs and returns a genesis block for a given channel ID.
-func (f *factory) Block(channelID string) *cb.Block {
+func (f *factory) Block(channelID string) (*cb.Block, error) {
 	payloadChannelHeader := utils.MakeChannelHeader(cb.HeaderType_CONFIG, msgVersion, channelID, epoch)
 	payloadSignatureHeader := utils.MakeSignatureHeader(nil, utils.CreateNonceOrPanic())
 	utils.SetTxID(payloadChannelHeader, payloadSignatureHeader)
@@ -58,5 +58,5 @@ func (f *factory) Block(channelID string) *cb.Block {
 	block.Metadata.Metadata[cb.BlockMetadataIndex_LAST_CONFIG] = utils.MarshalOrPanic(&cb.Metadata{
 		Value: utils.MarshalOrPanic(&cb.LastConfig{Index: 0}),
 	})
-	return block
+	return block, nil
 }

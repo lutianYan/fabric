@@ -20,11 +20,13 @@ import (
 	"github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
+
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/peer"
 )
 
 // fsBlockStore - filesystem based implementation for `BlockStore`
+//fsBlockStore实现了BlockStore，在文件系统中保存区块
 type fsBlockStore struct {
 	id      string
 	conf    *Conf
@@ -38,6 +40,7 @@ func newFsBlockStore(id string, conf *Conf, indexConfig *blkstorage.IndexConfig,
 }
 
 // AddBlock adds a new block
+//添加区块
 func (store *fsBlockStore) AddBlock(block *common.Block) error {
 	return store.fileMgr.addBlock(block)
 }

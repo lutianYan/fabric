@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+//实现相应的序列化功能
+
 package fsblkstorage
 
 import (
@@ -23,13 +25,15 @@ import (
 	"github.com/hyperledger/fabric/protos/utils"
 )
 
+//区块信息的数据结构
 type serializedBlockInfo struct {
 	blockHeader *common.BlockHeader
-	txOffsets   []*txindexInfo
+	txOffsets   []*txindexInfo //记录交易信息的数据（获取各个交易的序列号以及它所在的位置）
 	metadata    *common.BlockMetadata
 }
 
 //The order of the transactions must be maintained for history
+//交易索引信息
 type txindexInfo struct {
 	txID        string
 	loc         *locPointer
@@ -40,8 +44,10 @@ func serializeBlock(block *common.Block) ([]byte, *serializedBlockInfo, error) {
 	buf := proto.NewBuffer(nil)
 	var err error
 	info := &serializedBlockInfo{}
+	//在序列化的过程中，可以提取出Block的交易id列表，元数据等信息，保存在serializedBlockInfo中;还可以计算出区块占用的字节数。
 	info.blockHeader = block.Header
 	info.metadata = block.Metadata
+	//将区块序列化
 	if err = addHeaderBytes(block.Header, buf); err != nil {
 		return nil, nil, err
 	}

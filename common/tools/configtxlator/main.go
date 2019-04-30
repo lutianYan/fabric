@@ -1,7 +1,17 @@
 /*
-Copyright IBM Corp. All Rights Reserved.
+Copyright IBM Corp. 2017 All Rights Reserved.
 
-SPDX-License-Identifier: Apache-2.0
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+                 http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 
 package main
@@ -9,28 +19,23 @@ package main
 import (
 	"fmt"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"os"
 	"reflect"
 
-	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/tools/configtxlator/metadata"
 	"github.com/hyperledger/fabric/common/tools/configtxlator/rest"
 	"github.com/hyperledger/fabric/common/tools/configtxlator/update"
 	"github.com/hyperledger/fabric/common/tools/protolator"
-	_ "github.com/hyperledger/fabric/protos/common"
-	cb "github.com/hyperledger/fabric/protos/common" // Import these to register the proto types
-	_ "github.com/hyperledger/fabric/protos/msp"
-	_ "github.com/hyperledger/fabric/protos/orderer"
-	_ "github.com/hyperledger/fabric/protos/orderer/etcdraft"
-	_ "github.com/hyperledger/fabric/protos/peer"
+	cb "github.com/hyperledger/fabric/protos/common"
 
-	"github.com/gorilla/handlers"
+	"github.com/golang/protobuf/proto"
+	"github.com/op/go-logging"
 	"github.com/pkg/errors"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
+
+var logger = logging.MustGetLogger("configtxlator")
 
 // command line flags
 var (
@@ -39,7 +44,6 @@ var (
 	start    = app.Command("start", "Start the configtxlator REST server")
 	hostname = start.Flag("hostname", "The hostname or IP on which the REST server will listen").Default("0.0.0.0").String()
 	port     = start.Flag("port", "The port on which the REST server will listen").Default("7059").Int()
-	cors     = start.Flag("CORS", "Allowable CORS domains, e.g. '*' or 'www.example.com' (may be repeated).").Strings()
 
 	protoEncode       = app.Command("proto_encode", "Converts a JSON document to protobuf.")
 	protoEncodeType   = protoEncode.Flag("type", "The type of protobuf structure to encode to.  For example, 'common.Config'.").Required().String()
@@ -60,14 +64,12 @@ var (
 	version = app.Command("version", "Show version information")
 )
 
-var logger = flogging.MustGetLogger("configtxlator")
-
 func main() {
 	kingpin.Version("0.0.1")
 	switch kingpin.MustParse(app.Parse(os.Args[1:])) {
 	// "start" command
 	case start.FullCommand():
-		startServer(fmt.Sprintf("%s:%d", *hostname, *port), *cors)
+		startServer(fmt.Sprintf("%s:%d", *hostname, *port))
 	// "proto_encode" command
 	case protoEncode.FullCommand():
 		defer (*protoEncodeSource).Close()
@@ -98,26 +100,9 @@ func main() {
 
 }
 
-func startServer(address string, cors []string) {
-	var err error
-
-	listener, err := net.Listen("tcp", address)
-	if err != nil {
-		app.Fatalf("Could not bind to address '%s': %s", address, err)
-	}
-
-	if len(cors) > 0 {
-		origins := handlers.AllowedOrigins(cors)
-		// Note, configtxlator only exposes POST APIs for the time being, this
-		// list will need to be expanded if new non-POST APIs are added
-		methods := handlers.AllowedMethods([]string{http.MethodPost})
-		headers := handlers.AllowedHeaders([]string{"Content-Type"})
-		logger.Infof("Serving HTTP requests on %s with CORS %v", listener.Addr(), cors)
-		err = http.Serve(listener, handlers.CORS(origins, methods, headers)(rest.NewRouter()))
-	} else {
-		logger.Infof("Serving HTTP requests on %s", listener.Addr())
-		err = http.Serve(listener, rest.NewRouter())
-	}
+func startServer(address string) {
+	logger.Infof("Serving HTTP requests on %s", address)
+	err := http.ListenAndServe(address, rest.NewRouter())
 
 	app.Fatalf("Error starting server:[%s]\n", err)
 }

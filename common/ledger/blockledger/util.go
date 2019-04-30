@@ -1,7 +1,14 @@
 /*
-Copyright IBM Corp. All Rights Reserved.
-
-SPDX-License-Identifier: Apache-2.0
+Copyright IBM Corp. 2016 All Rights Reserved.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+                 http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 
 package blockledger
@@ -50,6 +57,7 @@ func CreateNextBlock(rl Reader, messages []*cb.Envelope) *cb.Block {
 				Newest: &ab.SeekNewest{},
 			},
 		})
+		<-it.ReadyChan() // Should never block, but just in case
 		block, status := it.Next()
 		if status != cb.Status_SUCCESS {
 			panic("Error seeking to newest block for chain with non-zero height")
@@ -79,18 +87,19 @@ func CreateNextBlock(rl Reader, messages []*cb.Envelope) *cb.Block {
 
 // GetBlock is a utility method for retrieving a single block
 func GetBlock(rl Reader, index uint64) *cb.Block {
-	iterator, _ := rl.Iterator(&ab.SeekPosition{
+	i, _ := rl.Iterator(&ab.SeekPosition{
 		Type: &ab.SeekPosition_Specified{
 			Specified: &ab.SeekSpecified{Number: index},
 		},
 	})
-	if iterator == nil {
+	select {
+	case <-i.ReadyChan():
+		block, status := i.Next()
+		if status != cb.Status_SUCCESS {
+			return nil
+		}
+		return block
+	default:
 		return nil
 	}
-	defer iterator.Close()
-	block, status := iterator.Next()
-	if status != cb.Status_SUCCESS {
-		return nil
-	}
-	return block
 }

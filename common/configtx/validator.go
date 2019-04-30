@@ -9,15 +9,15 @@ package configtx
 import (
 	"regexp"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/policies"
 	cb "github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/utils"
+
+	"github.com/golang/protobuf/proto"
 	"github.com/pkg/errors"
 )
 
-var logger = flogging.MustGetLogger("common.configtx")
+var logger = flogging.MustGetLogger("common/configtx")
 
 // Constraints for valid channel and config IDs
 var (
@@ -131,28 +131,34 @@ func (vi *ValidatorImpl) ProposeConfigUpdate(configtx *cb.Envelope) (*cb.ConfigE
 	return vi.proposeConfigUpdate(configtx)
 }
 
+//创建通道配置更新交易消息
 func (vi *ValidatorImpl) proposeConfigUpdate(configtx *cb.Envelope) (*cb.ConfigEnvelope, error) {
-	configUpdateEnv, err := utils.EnvelopeToConfigUpdate(configtx)
+	//解析通道配置更新消息
+	configUpdateEnv, err := envelopeToConfigUpdate(configtx)
 	if err != nil {
 		return nil, errors.Errorf("error converting envelope to config update: %s", err)
 	}
 
+	//验证通道配置更新消息的合法性，并返回配置字典
 	configMap, err := vi.authorizeUpdate(configUpdateEnv)
 	if err != nil {
 		return nil, errors.Errorf("error authorizing update: %s", err)
 	}
 
+	//将配置字典configMap转换为通道配置组（configGroup类型）
 	channelGroup, err := configMapToConfig(configMap, vi.namespace)
 	if err != nil {
 		return nil, errors.Errorf("could not turn configMap back to channelGroup: %s", err)
 	}
 
+	//返回通道配置更新消息
 	return &cb.ConfigEnvelope{
+		//最新版本 通道配置消息
 		Config: &cb.Config{
-			Sequence:     vi.sequence + 1,
-			ChannelGroup: channelGroup,
+			Sequence:     vi.sequence + 1, //通道配置序号增加1
+			ChannelGroup: channelGroup, //通道配置组
 		},
-		LastUpdate: configtx,
+		LastUpdate: configtx, //最近更新的通道配置交易消息
 	}, nil
 }
 
@@ -170,7 +176,7 @@ func (vi *ValidatorImpl) Validate(configEnv *cb.ConfigEnvelope) error {
 		return errors.Errorf("config currently at sequence %d, cannot validate config at sequence %d", vi.sequence, configEnv.Config.Sequence)
 	}
 
-	configUpdateEnv, err := utils.EnvelopeToConfigUpdate(configEnv.LastUpdate)
+	configUpdateEnv, err := envelopeToConfigUpdate(configEnv.LastUpdate)
 	if err != nil {
 		return err
 	}

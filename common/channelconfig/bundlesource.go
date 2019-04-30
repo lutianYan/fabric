@@ -20,18 +20,15 @@ import (
 // so that gross go-routine reads are not vulnerable to out-of-order execution memory
 // type bugs.
 type BundleSource struct {
-	bundle    atomic.Value
-	callbacks []BundleActor
+	bundle    atomic.Value //Bundle结构对象
+	callbacks []func(*Bundle) //回调函数
 }
-
-// BundleActor performs an operation based on the given bundle
-type BundleActor func(bundle *Bundle)
 
 // NewBundleSource creates a new BundleSource with an initial Bundle value
 // The callbacks will be invoked whenever the Update method is called for the
 // BundleSource.  Note, these callbacks are called immediately before this function
 // returns.
-func NewBundleSource(bundle *Bundle, callbacks ...BundleActor) *BundleSource {
+func NewBundleSource(bundle *Bundle, callbacks ...func(*Bundle)) *BundleSource {
 	bs := &BundleSource{
 		callbacks: callbacks,
 	}

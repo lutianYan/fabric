@@ -2,11 +2,11 @@
 package mock
 
 import (
-	context "context"
-	sync "sync"
+	"sync"
 
-	proto "github.com/golang/protobuf/proto"
-	deliver "github.com/hyperledger/fabric/common/deliver"
+	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric/common/deliver"
+	"golang.org/x/net/context"
 )
 
 type Inspector struct {
@@ -41,8 +41,7 @@ func (fake *Inspector) Inspect(arg1 context.Context, arg2 proto.Message) error {
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.inspectReturns
-	return fakeReturns.result1
+	return fake.inspectReturns.result1
 }
 
 func (fake *Inspector) InspectCallCount() int {
@@ -51,22 +50,13 @@ func (fake *Inspector) InspectCallCount() int {
 	return len(fake.inspectArgsForCall)
 }
 
-func (fake *Inspector) InspectCalls(stub func(context.Context, proto.Message) error) {
-	fake.inspectMutex.Lock()
-	defer fake.inspectMutex.Unlock()
-	fake.InspectStub = stub
-}
-
 func (fake *Inspector) InspectArgsForCall(i int) (context.Context, proto.Message) {
 	fake.inspectMutex.RLock()
 	defer fake.inspectMutex.RUnlock()
-	argsForCall := fake.inspectArgsForCall[i]
-	return argsForCall.arg1, argsForCall.arg2
+	return fake.inspectArgsForCall[i].arg1, fake.inspectArgsForCall[i].arg2
 }
 
 func (fake *Inspector) InspectReturns(result1 error) {
-	fake.inspectMutex.Lock()
-	defer fake.inspectMutex.Unlock()
 	fake.InspectStub = nil
 	fake.inspectReturns = struct {
 		result1 error
@@ -74,8 +64,6 @@ func (fake *Inspector) InspectReturns(result1 error) {
 }
 
 func (fake *Inspector) InspectReturnsOnCall(i int, result1 error) {
-	fake.inspectMutex.Lock()
-	defer fake.inspectMutex.Unlock()
 	fake.InspectStub = nil
 	if fake.inspectReturnsOnCall == nil {
 		fake.inspectReturnsOnCall = make(map[int]struct {

@@ -20,9 +20,10 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/tools/protolator/testprotos"
 	"github.com/hyperledger/fabric/protos/utils"
+
+	"github.com/golang/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -131,27 +132,4 @@ func TestSliceStaticallyOpaqueMsg(t *testing.T) {
 	assert.NoError(t, DeepMarshalJSON(&buffer, startMsg))
 	assert.NoError(t, DeepUnmarshalJSON(bytes.NewReader(buffer.Bytes()), newMsg))
 	assert.Equal(t, fromPrefix+toPrefix+extractSimpleMsgPlainField(startMsg.SliceOpaqueField[0]), extractSimpleMsgPlainField(newMsg.SliceOpaqueField[0]))
-}
-
-func TestIgnoredNilFields(t *testing.T) {
-	_ = StaticallyOpaqueFieldProto(&testprotos.UnmarshalableDeepFields{})
-	_ = StaticallyOpaqueMapFieldProto(&testprotos.UnmarshalableDeepFields{})
-	_ = StaticallyOpaqueSliceFieldProto(&testprotos.UnmarshalableDeepFields{})
-
-	fieldFactories = []protoFieldFactory{
-		staticallyOpaqueFieldFactory{},
-		staticallyOpaqueMapFieldFactory{},
-		staticallyOpaqueSliceFieldFactory{},
-	}
-
-	assert.Error(t, DeepMarshalJSON(&bytes.Buffer{}, &testprotos.UnmarshalableDeepFields{
-		PlainOpaqueField: []byte("fake"),
-	}))
-	assert.Error(t, DeepMarshalJSON(&bytes.Buffer{}, &testprotos.UnmarshalableDeepFields{
-		MapOpaqueField: map[string][]byte{"foo": []byte("bar")},
-	}))
-	assert.Error(t, DeepMarshalJSON(&bytes.Buffer{}, &testprotos.UnmarshalableDeepFields{
-		SliceOpaqueField: [][]byte{[]byte("bar")},
-	}))
-	assert.NoError(t, DeepMarshalJSON(&bytes.Buffer{}, &testprotos.UnmarshalableDeepFields{}))
 }

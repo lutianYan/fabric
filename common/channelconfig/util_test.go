@@ -12,6 +12,7 @@ import (
 	cb "github.com/hyperledger/fabric/protos/common"
 	mspprotos "github.com/hyperledger/fabric/protos/msp"
 	pb "github.com/hyperledger/fabric/protos/peer"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -32,7 +33,7 @@ func TestUtilsBasic(t *testing.T) {
 	basicTest(t, HashingAlgorithmValue())
 	basicTest(t, BlockDataHashingStructureValue())
 	basicTest(t, OrdererAddressesValue([]string{"foo:1", "bar:2"}))
-	basicTest(t, ConsensusTypeValue("foo", []byte("bar")))
+	basicTest(t, ConsensusTypeValue("foo"))
 	basicTest(t, BatchSizeValue(1, 2, 3))
 	basicTest(t, BatchTimeoutValue("1s"))
 	basicTest(t, ChannelRestrictionsValue(7))

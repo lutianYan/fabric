@@ -7,9 +7,9 @@ SPDX-License-Identifier: Apache-2.0
 package configtx
 
 import (
-	"github.com/golang/protobuf/proto"
 	cb "github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/utils"
+
+	"github.com/golang/protobuf/proto"
 )
 
 // UnmarshalConfig attempts to unmarshal bytes to a *cb.Config
@@ -86,18 +86,4 @@ func UnmarshalConfigEnvelopeOrPanic(data []byte) *cb.ConfigEnvelope {
 		panic(err)
 	}
 	return result
-}
-
-// UnmarshalConfigUpdateFromPayload unmarshals configuration update from given payload
-func UnmarshalConfigUpdateFromPayload(payload *cb.Payload) (*cb.ConfigUpdate, error) {
-	configEnv, err := UnmarshalConfigEnvelope(payload.Data)
-	if err != nil {
-		return nil, err
-	}
-	configUpdateEnv, err := utils.EnvelopeToConfigUpdate(configEnv.LastUpdate)
-	if err != nil {
-		return nil, err
-	}
-
-	return UnmarshalConfigUpdate(configUpdateEnv.ConfigUpdate)
 }

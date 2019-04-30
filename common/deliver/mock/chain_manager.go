@@ -2,43 +2,44 @@
 package mock
 
 import (
-	sync "sync"
+	"sync"
 
-	deliver "github.com/hyperledger/fabric/common/deliver"
+	"github.com/hyperledger/fabric/common/deliver"
 )
 
 type ChainManager struct {
-	GetChainStub        func(string) deliver.Chain
+	GetChainStub        func(chainID string) (deliver.Chain, bool)
 	getChainMutex       sync.RWMutex
 	getChainArgsForCall []struct {
-		arg1 string
+		chainID string
 	}
 	getChainReturns struct {
 		result1 deliver.Chain
+		result2 bool
 	}
 	getChainReturnsOnCall map[int]struct {
 		result1 deliver.Chain
+		result2 bool
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *ChainManager) GetChain(arg1 string) deliver.Chain {
+func (fake *ChainManager) GetChain(chainID string) (deliver.Chain, bool) {
 	fake.getChainMutex.Lock()
 	ret, specificReturn := fake.getChainReturnsOnCall[len(fake.getChainArgsForCall)]
 	fake.getChainArgsForCall = append(fake.getChainArgsForCall, struct {
-		arg1 string
-	}{arg1})
-	fake.recordInvocation("GetChain", []interface{}{arg1})
+		chainID string
+	}{chainID})
+	fake.recordInvocation("GetChain", []interface{}{chainID})
 	fake.getChainMutex.Unlock()
 	if fake.GetChainStub != nil {
-		return fake.GetChainStub(arg1)
+		return fake.GetChainStub(chainID)
 	}
 	if specificReturn {
-		return ret.result1
+		return ret.result1, ret.result2
 	}
-	fakeReturns := fake.getChainReturns
-	return fakeReturns.result1
+	return fake.getChainReturns.result1, fake.getChainReturns.result2
 }
 
 func (fake *ChainManager) GetChainCallCount() int {
@@ -47,40 +48,32 @@ func (fake *ChainManager) GetChainCallCount() int {
 	return len(fake.getChainArgsForCall)
 }
 
-func (fake *ChainManager) GetChainCalls(stub func(string) deliver.Chain) {
-	fake.getChainMutex.Lock()
-	defer fake.getChainMutex.Unlock()
-	fake.GetChainStub = stub
-}
-
 func (fake *ChainManager) GetChainArgsForCall(i int) string {
 	fake.getChainMutex.RLock()
 	defer fake.getChainMutex.RUnlock()
-	argsForCall := fake.getChainArgsForCall[i]
-	return argsForCall.arg1
+	return fake.getChainArgsForCall[i].chainID
 }
 
-func (fake *ChainManager) GetChainReturns(result1 deliver.Chain) {
-	fake.getChainMutex.Lock()
-	defer fake.getChainMutex.Unlock()
+func (fake *ChainManager) GetChainReturns(result1 deliver.Chain, result2 bool) {
 	fake.GetChainStub = nil
 	fake.getChainReturns = struct {
 		result1 deliver.Chain
-	}{result1}
+		result2 bool
+	}{result1, result2}
 }
 
-func (fake *ChainManager) GetChainReturnsOnCall(i int, result1 deliver.Chain) {
-	fake.getChainMutex.Lock()
-	defer fake.getChainMutex.Unlock()
+func (fake *ChainManager) GetChainReturnsOnCall(i int, result1 deliver.Chain, result2 bool) {
 	fake.GetChainStub = nil
 	if fake.getChainReturnsOnCall == nil {
 		fake.getChainReturnsOnCall = make(map[int]struct {
 			result1 deliver.Chain
+			result2 bool
 		})
 	}
 	fake.getChainReturnsOnCall[i] = struct {
 		result1 deliver.Chain
-	}{result1}
+		result2 bool
+	}{result1, result2}
 }
 
 func (fake *ChainManager) Invocations() map[string][][]interface{} {

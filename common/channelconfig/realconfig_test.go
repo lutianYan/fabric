@@ -14,6 +14,7 @@ import (
 	"github.com/hyperledger/fabric/common/tools/configtxgen/encoder"
 	genesisconfig "github.com/hyperledger/fabric/common/tools/configtxgen/localconfig"
 	"github.com/hyperledger/fabric/protos/utils"
+
 	"github.com/stretchr/testify/assert"
 )
 

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	pb "github.com/hyperledger/fabric/protos/peer"
+
 	"github.com/stretchr/testify/assert"
 )
 

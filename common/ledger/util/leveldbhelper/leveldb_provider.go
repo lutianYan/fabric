@@ -58,10 +58,11 @@ func (p *Provider) Close() {
 	p.db.Close()
 }
 
+//是一个数据库处理对象，直接封装了DB和该数据库名称，也是直接由账本提供使用的对象，有put get和delete等基础操作
 // DBHandle is an handle to a named db
 type DBHandle struct {
-	dbName string
-	db     *DB
+	dbName string //数据库名称
+	db     *DB //数据库对象
 }
 
 // Get returns the value for the given key
@@ -81,9 +82,6 @@ func (h *DBHandle) Delete(key []byte, sync bool) error {
 
 // WriteBatch writes a batch in an atomic way
 func (h *DBHandle) WriteBatch(batch *UpdateBatch, sync bool) error {
-	if len(batch.KVs) == 0 {
-		return nil
-	}
 	levelBatch := &leveldb.Batch{}
 	for k, v := range batch.KVs {
 		key := constructLevelKey(h.dbName, []byte(k))
@@ -136,12 +134,8 @@ func (batch *UpdateBatch) Delete(key []byte) {
 	batch.KVs[string(key)] = nil
 }
 
-// Len returns the number of entries in the batch
-func (batch *UpdateBatch) Len() int {
-	return len(batch.KVs)
-}
-
 // Iterator extends actual leveldb iterator
+//是数据库迭代器，直接封装了leveldb的Iterator 没有特别之处
 type Iterator struct {
 	iterator.Iterator
 }

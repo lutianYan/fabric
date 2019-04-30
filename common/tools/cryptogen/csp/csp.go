@@ -18,7 +18,6 @@ import (
 	"github.com/hyperledger/fabric/bccsp"
 	"github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/bccsp/signer"
-	"github.com/pkg/errors"
 )
 
 // LoadPrivateKey loads a private key from file in keystorePath
@@ -52,9 +51,6 @@ func LoadPrivateKey(keystorePath string) (bccsp.Key, crypto.Signer, error) {
 			}
 
 			block, _ := pem.Decode(rawKey)
-			if block == nil {
-				return errors.Errorf("%s: wrong PEM encoding", path)
-			}
 			priv, err = csp.KeyImport(block.Bytes, &bccsp.ECDSAPrivateKeyImportOpts{Temporary: true})
 			if err != nil {
 				return err

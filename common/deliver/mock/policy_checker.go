@@ -2,18 +2,18 @@
 package mock
 
 import (
-	sync "sync"
+	"sync"
 
-	deliver "github.com/hyperledger/fabric/common/deliver"
-	common "github.com/hyperledger/fabric/protos/common"
+	"github.com/hyperledger/fabric/common/deliver"
+	cb "github.com/hyperledger/fabric/protos/common"
 )
 
 type PolicyChecker struct {
-	CheckPolicyStub        func(*common.Envelope, string) error
+	CheckPolicyStub        func(envelope *cb.Envelope, channelID string) error
 	checkPolicyMutex       sync.RWMutex
 	checkPolicyArgsForCall []struct {
-		arg1 *common.Envelope
-		arg2 string
+		envelope  *cb.Envelope
+		channelID string
 	}
 	checkPolicyReturns struct {
 		result1 error
@@ -25,23 +25,22 @@ type PolicyChecker struct {
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *PolicyChecker) CheckPolicy(arg1 *common.Envelope, arg2 string) error {
+func (fake *PolicyChecker) CheckPolicy(envelope *cb.Envelope, channelID string) error {
 	fake.checkPolicyMutex.Lock()
 	ret, specificReturn := fake.checkPolicyReturnsOnCall[len(fake.checkPolicyArgsForCall)]
 	fake.checkPolicyArgsForCall = append(fake.checkPolicyArgsForCall, struct {
-		arg1 *common.Envelope
-		arg2 string
-	}{arg1, arg2})
-	fake.recordInvocation("CheckPolicy", []interface{}{arg1, arg2})
+		envelope  *cb.Envelope
+		channelID string
+	}{envelope, channelID})
+	fake.recordInvocation("CheckPolicy", []interface{}{envelope, channelID})
 	fake.checkPolicyMutex.Unlock()
 	if fake.CheckPolicyStub != nil {
-		return fake.CheckPolicyStub(arg1, arg2)
+		return fake.CheckPolicyStub(envelope, channelID)
 	}
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.checkPolicyReturns
-	return fakeReturns.result1
+	return fake.checkPolicyReturns.result1
 }
 
 func (fake *PolicyChecker) CheckPolicyCallCount() int {
@@ -50,22 +49,13 @@ func (fake *PolicyChecker) CheckPolicyCallCount() int {
 	return len(fake.checkPolicyArgsForCall)
 }
 
-func (fake *PolicyChecker) CheckPolicyCalls(stub func(*common.Envelope, string) error) {
-	fake.checkPolicyMutex.Lock()
-	defer fake.checkPolicyMutex.Unlock()
-	fake.CheckPolicyStub = stub
-}
-
-func (fake *PolicyChecker) CheckPolicyArgsForCall(i int) (*common.Envelope, string) {
+func (fake *PolicyChecker) CheckPolicyArgsForCall(i int) (*cb.Envelope, string) {
 	fake.checkPolicyMutex.RLock()
 	defer fake.checkPolicyMutex.RUnlock()
-	argsForCall := fake.checkPolicyArgsForCall[i]
-	return argsForCall.arg1, argsForCall.arg2
+	return fake.checkPolicyArgsForCall[i].envelope, fake.checkPolicyArgsForCall[i].channelID
 }
 
 func (fake *PolicyChecker) CheckPolicyReturns(result1 error) {
-	fake.checkPolicyMutex.Lock()
-	defer fake.checkPolicyMutex.Unlock()
 	fake.CheckPolicyStub = nil
 	fake.checkPolicyReturns = struct {
 		result1 error
@@ -73,8 +63,6 @@ func (fake *PolicyChecker) CheckPolicyReturns(result1 error) {
 }
 
 func (fake *PolicyChecker) CheckPolicyReturnsOnCall(i int, result1 error) {
-	fake.checkPolicyMutex.Lock()
-	defer fake.checkPolicyMutex.Unlock()
 	fake.CheckPolicyStub = nil
 	if fake.checkPolicyReturnsOnCall == nil {
 		fake.checkPolicyReturnsOnCall = make(map[int]struct {

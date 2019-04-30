@@ -1,7 +1,17 @@
 /*
-Copyright IBM Corp. All Rights Reserved.
+Copyright IBM Corp. 2016 All Rights Reserved.
 
-SPDX-License-Identifier: Apache-2.0
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+                 http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 
 package fileledger
@@ -12,9 +22,21 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	cb "github.com/hyperledger/fabric/protos/common"
 	ab "github.com/hyperledger/fabric/protos/orderer"
+
+	"github.com/op/go-logging"
 )
 
-var logger = flogging.MustGetLogger("common.ledger.blockledger.file")
+const pkgLogID = "common/ledger/blockledger/file"
+
+var logger *logging.Logger
+
+var closedChan chan struct{}
+
+func init() {
+	logger = flogging.MustGetLogger(pkgLogID)
+	closedChan = make(chan struct{})
+	close(closedChan)
+}
 
 // FileLedger is a struct used to interact with a node's ledger
 type FileLedger struct {
@@ -56,6 +78,15 @@ func (i *fileLedgerIterator) Next() (*cb.Block, cb.Status) {
 	return result.(*cb.Block), cb.Status_SUCCESS
 }
 
+// ReadyChan supplies a channel which will block until Next will not block
+func (i *fileLedgerIterator) ReadyChan() <-chan struct{} {
+	signal := i.ledger.signal
+	if i.blockNumber > i.ledger.Height()-1 {
+		return signal
+	}
+	return closedChan
+}
+
 // Close releases resources acquired by the Iterator
 func (i *fileLedgerIterator) Close() {
 	i.commonIterator.Close()
@@ -63,8 +94,10 @@ func (i *fileLedgerIterator) Close() {
 
 // Iterator returns an Iterator, as specified by an ab.SeekInfo message, and its
 // starting block number
+//该方法根据startPosition.Type开始位置对象的类型计算开始区块号startingBlockNumber
 func (fl *FileLedger) Iterator(startPosition *ab.SeekPosition) (blockledger.Iterator, uint64) {
 	var startingBlockNumber uint64
+	//该方法根据startPosition.Type开始位置对象的类型计算开始区块号startingBlockNumber
 	switch start := startPosition.Type.(type) {
 	case *ab.SeekPosition_Oldest:
 		startingBlockNumber = 0
@@ -78,6 +111,7 @@ func (fl *FileLedger) Iterator(startPosition *ab.SeekPosition) (blockledger.Iter
 	case *ab.SeekPosition_Specified:
 		startingBlockNumber = start.Specified.Number
 		height := fl.Height()
+		//若超过height，则报错
 		if startingBlockNumber > height {
 			return &blockledger.NotFoundErrorIterator{}, 0
 		}
@@ -85,6 +119,8 @@ func (fl *FileLedger) Iterator(startPosition *ab.SeekPosition) (blockledger.Iter
 		return &blockledger.NotFoundErrorIterator{}, 0
 	}
 
+	//构造账本区块迭代器
+	//创建指定区块存储对象上的区块迭代器（封装了区块文件管理器mgr，最新区块号、指定获取的区块号，区块文件流等）
 	iterator, err := fl.blockStore.RetrieveBlocks(startingBlockNumber)
 	if err != nil {
 		return &blockledger.NotFoundErrorIterator{}, 0
