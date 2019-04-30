@@ -9,11 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Shopify/sarama"
 	bccsp "github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/viperutil"
 	coreconfig "github.com/hyperledger/fabric/core/config"
+
+	"github.com/Shopify/sarama"
 	"github.com/spf13/viper"
 )
 
@@ -28,14 +29,11 @@ var logger = flogging.MustGetLogger("localconfig")
 // modify the default mapping, see the "Unmarshal"
 // section of https://github.com/spf13/viper for more info.
 type TopLevel struct {
-	General    General
-	FileLedger FileLedger
-	RAMLedger  RAMLedger
-	Kafka      Kafka
-	Debug      Debug
-	Consensus  interface{}
-	Operations Operations
-	Metrics    Metrics
+	General    General	//通用配置对象
+	FileLedger FileLedger //文件账本配置对象
+	RAMLedger  RAMLedger //RAM账本配置对象
+	Kafka      Kafka //Kafka共识组件配置对象
+	Debug      Debug //调试信息配置对象
 }
 
 // General contains config which should be common among all orderer types.
@@ -44,36 +42,18 @@ type General struct {
 	ListenAddress  string
 	ListenPort     uint16
 	TLS            TLS
-	Cluster        Cluster
 	Keepalive      Keepalive
 	GenesisMethod  string
 	GenesisProfile string
 	SystemChannel  string
 	GenesisFile    string
 	Profile        Profile
+	LogLevel       string
+	LogFormat      string
 	LocalMSPDir    string
 	LocalMSPID     string
 	BCCSP          *bccsp.FactoryOpts
 	Authentication Authentication
-}
-
-type Cluster struct {
-	ListenAddress                        string
-	ListenPort                           uint16
-	ServerCertificate                    string
-	ServerPrivateKey                     string
-	ClientCertificate                    string
-	ClientPrivateKey                     string
-	RootCAs                              []string
-	DialTimeout                          time.Duration
-	RPCTimeout                           time.Duration
-	ReplicationBufferSize                int
-	ReplicationPullTimeout               time.Duration
-	ReplicationRetryTimeout              time.Duration
-	ReplicationBackgroundRefreshInterval time.Duration
-	ReplicationMaxRetries                int
-	SendBufferSize                       int
-	CertExpirationWarningThreshold       time.Duration
 }
 
 // Keepalive contains configuration for gRPC servers.
@@ -91,13 +71,6 @@ type TLS struct {
 	RootCAs            []string
 	ClientAuthRequired bool
 	ClientRootCAs      []string
-}
-
-// SASLPlain contains configuration for SASL/PLAIN authentication
-type SASLPlain struct {
-	Enabled  bool
-	User     string
-	Password string
 }
 
 // Authentication contains configuration parameters related to authenticating
@@ -125,12 +98,10 @@ type RAMLedger struct {
 
 // Kafka contains configuration for the Kafka-based orderer.
 type Kafka struct {
-	Retry     Retry
-	Verbose   bool
-	Version   sarama.KafkaVersion // TODO Move this to global config
-	TLS       TLS
-	SASLPlain SASLPlain
-	Topic     Topic
+	Retry   Retry
+	Verbose bool
+	Version sarama.KafkaVersion // TODO Move this to global config
+	TLS     TLS
 }
 
 // Retry contains configuration related to retries and timeouts when the
@@ -176,35 +147,10 @@ type Consumer struct {
 	RetryBackoff time.Duration
 }
 
-// Topic contains the settings to use when creating Kafka topics
-type Topic struct {
-	ReplicationFactor int16
-}
-
 // Debug contains configuration for the orderer's debug parameters.
 type Debug struct {
 	BroadcastTraceDir string
 	DeliverTraceDir   string
-}
-
-// Operations configures the operations endpont for the orderer.
-type Operations struct {
-	ListenAddress string
-	TLS           TLS
-}
-
-// Operations confiures the metrics provider for the orderer.
-type Metrics struct {
-	Provider string
-	Statsd   Statsd
-}
-
-// Statsd provides the configuration required to emit statsd metrics from the orderer.
-type Statsd struct {
-	Network       string
-	Address       string
-	WriteInterval time.Duration
-	Prefix        string
 }
 
 // Defaults carries the default orderer configuration values.
@@ -221,17 +167,8 @@ var Defaults = TopLevel{
 			Enabled: false,
 			Address: "0.0.0.0:6060",
 		},
-		Cluster: Cluster{
-			ReplicationMaxRetries:                12,
-			RPCTimeout:                           time.Second * 7,
-			DialTimeout:                          time.Second * 5,
-			ReplicationBufferSize:                20971520,
-			SendBufferSize:                       10,
-			ReplicationBackgroundRefreshInterval: time.Minute * 5,
-			ReplicationRetryTimeout:              time.Second * 5,
-			ReplicationPullTimeout:               time.Second * 5,
-			CertExpirationWarningThreshold:       time.Hour * 24 * 7,
-		},
+		LogLevel:    "INFO",
+		LogFormat:   "%{color}%{time:2006-01-02 15:04:05.000 MST} [%{module}] %{shortfunc} -> %{level:.4s} %{id:03x}%{color:reset} %{message}",
 		LocalMSPDir: "msp",
 		LocalMSPID:  "SampleOrg",
 		BCCSP:       bccsp.GetDefaultOpts(),
@@ -274,56 +211,54 @@ var Defaults = TopLevel{
 		TLS: TLS{
 			Enabled: false,
 		},
-		Topic: Topic{
-			ReplicationFactor: 3,
-		},
 	},
 	Debug: Debug{
 		BroadcastTraceDir: "",
 		DeliverTraceDir:   "",
 	},
-	Operations: Operations{
-		ListenAddress: "127.0.0.1:0",
-	},
-	Metrics: Metrics{
-		Provider: "disabled",
-	},
 }
 
 // Load parses the orderer YAML file and environment, producing
 // a struct suitable for config use, returning error on failure.
+//加载orderer.yaml文件与解析环境变量，创建orderer配置对象
 func Load() (*TopLevel, error) {
+	//创建Viper对象
 	config := viper.New()
+	//初始化Viper组件
 	coreconfig.InitViper(config, "orderer")
+	//设置环境变量前缀为ORDERER
+	//添加指定前缀
 	config.SetEnvPrefix(Prefix)
+	//查找匹配的环境变量
 	config.AutomaticEnv()
+	//创建替换符
+	//将.替换为_
 	replacer := strings.NewReplacer(".", "_")
+	//设置环境变量替换符
 	config.SetEnvKeyReplacer(replacer)
 
+	//加载配置文件orderer.yaml
 	if err := config.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("Error reading configuration: %s", err)
 	}
 
 	var uconf TopLevel
+	//将配置信息解析到Orderer配置对象
 	if err := viperutil.EnhancedExactUnmarshal(config, &uconf); err != nil {
 		return nil, fmt.Errorf("Error unmarshaling config into struct: %s", err)
 	}
-
+	//检查配置对象的合法性，并初始化Orderer配置对象
+	//如果配置项没有设置参数值，则使用全局变量Defaults对象设置默认值
+	//最后在退出的时候，重置Orderer配置文件路径
 	uconf.completeInitialization(filepath.Dir(config.ConfigFileUsed()))
 	return &uconf, nil
 }
 
 func (c *TopLevel) completeInitialization(configDir string) {
 	defer func() {
-		// Translate any paths for cluster TLS configuration if applicable
-		if c.General.Cluster.ClientPrivateKey != "" {
-			coreconfig.TranslatePathInPlace(configDir, &c.General.Cluster.ClientPrivateKey)
-		}
-		if c.General.Cluster.ClientCertificate != "" {
-			coreconfig.TranslatePathInPlace(configDir, &c.General.Cluster.ClientCertificate)
-		}
-		c.General.Cluster.RootCAs = translateCAs(configDir, c.General.Cluster.RootCAs)
-		// Translate any paths for general TLS configuration
+		// Translate any paths
+		//重置Orderer配置文件路径
+		//添加配置文件所在的路径的前缀，将其转换为绝对路径
 		c.General.TLS.RootCAs = translateCAs(configDir, c.General.TLS.RootCAs)
 		c.General.TLS.ClientRootCAs = translateCAs(configDir, c.General.TLS.ClientRootCAs)
 		coreconfig.TranslatePathInPlace(configDir, &c.General.TLS.PrivateKey)
@@ -342,8 +277,15 @@ func (c *TopLevel) completeInitialization(configDir string) {
 			logger.Infof("General.ListenAddress unset, setting to %s", Defaults.General.ListenAddress)
 			c.General.ListenAddress = Defaults.General.ListenAddress
 		case c.General.ListenPort == 0:
-			logger.Infof("General.ListenPort unset, setting to %v", Defaults.General.ListenPort)
+			logger.Infof("General.ListenPort unset, setting to %s", Defaults.General.ListenPort)
 			c.General.ListenPort = Defaults.General.ListenPort
+
+		case c.General.LogLevel == "":
+			logger.Infof("General.LogLevel unset, setting to %s", Defaults.General.LogLevel)
+			c.General.LogLevel = Defaults.General.LogLevel
+		case c.General.LogFormat == "":
+			logger.Infof("General.LogFormat unset, setting to %s", Defaults.General.LogFormat)
+			c.General.LogFormat = Defaults.General.LogFormat
 
 		case c.General.GenesisMethod == "":
 			c.General.GenesisMethod = Defaults.General.GenesisMethod
@@ -353,35 +295,13 @@ func (c *TopLevel) completeInitialization(configDir string) {
 			c.General.GenesisProfile = Defaults.General.GenesisProfile
 		case c.General.SystemChannel == "":
 			c.General.SystemChannel = Defaults.General.SystemChannel
-		case c.General.Cluster.RPCTimeout == 0:
-			c.General.Cluster.RPCTimeout = Defaults.General.Cluster.RPCTimeout
-		case c.General.Cluster.DialTimeout == 0:
-			c.General.Cluster.DialTimeout = Defaults.General.Cluster.DialTimeout
-		case c.General.Cluster.ReplicationMaxRetries == 0:
-			c.General.Cluster.ReplicationMaxRetries = Defaults.General.Cluster.ReplicationMaxRetries
-		case c.General.Cluster.SendBufferSize == 0:
-			c.General.Cluster.SendBufferSize = Defaults.General.Cluster.SendBufferSize
-		case c.General.Cluster.ReplicationBufferSize == 0:
-			c.General.Cluster.ReplicationBufferSize = Defaults.General.Cluster.ReplicationBufferSize
-		case c.General.Cluster.ReplicationPullTimeout == 0:
-			c.General.Cluster.ReplicationPullTimeout = Defaults.General.Cluster.ReplicationPullTimeout
-		case c.General.Cluster.ReplicationRetryTimeout == 0:
-			c.General.Cluster.ReplicationRetryTimeout = Defaults.General.Cluster.ReplicationRetryTimeout
-		case c.General.Cluster.ReplicationBackgroundRefreshInterval == 0:
-			c.General.Cluster.ReplicationBackgroundRefreshInterval = Defaults.General.Cluster.ReplicationBackgroundRefreshInterval
-		case c.General.Cluster.CertExpirationWarningThreshold == 0:
-			c.General.Cluster.CertExpirationWarningThreshold = Defaults.General.Cluster.CertExpirationWarningThreshold
+
 		case c.Kafka.TLS.Enabled && c.Kafka.TLS.Certificate == "":
 			logger.Panicf("General.Kafka.TLS.Certificate must be set if General.Kafka.TLS.Enabled is set to true.")
 		case c.Kafka.TLS.Enabled && c.Kafka.TLS.PrivateKey == "":
 			logger.Panicf("General.Kafka.TLS.PrivateKey must be set if General.Kafka.TLS.Enabled is set to true.")
 		case c.Kafka.TLS.Enabled && c.Kafka.TLS.RootCAs == nil:
 			logger.Panicf("General.Kafka.TLS.CertificatePool must be set if General.Kafka.TLS.Enabled is set to true.")
-
-		case c.Kafka.SASLPlain.Enabled && c.Kafka.SASLPlain.User == "":
-			logger.Panic("General.Kafka.SASLPlain.User must be set if General.Kafka.SASLPlain.Enabled is set to true.")
-		case c.Kafka.SASLPlain.Enabled && c.Kafka.SASLPlain.Password == "":
-			logger.Panic("General.Kafka.SASLPlain.Password must be set if General.Kafka.SASLPlain.Enabled is set to true.")
 
 		case c.General.Profile.Enabled && c.General.Profile.Address == "":
 			logger.Infof("Profiling enabled and General.Profile.Address unset, setting to %s", Defaults.General.Profile.Address)

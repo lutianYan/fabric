@@ -4,7 +4,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"math"
@@ -18,6 +17,8 @@ import (
 	cb "github.com/hyperledger/fabric/protos/common"
 	ab "github.com/hyperledger/fabric/protos/orderer"
 	"github.com/hyperledger/fabric/protos/utils"
+
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
 

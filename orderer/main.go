@@ -12,5 +12,7 @@ package main
 import "github.com/hyperledger/fabric/orderer/common/server"
 
 func main() {
+	//由orderer start启动主函数
+	//初始化相关的配置
 	server.Main()
 }

@@ -9,7 +9,6 @@ package msgprocessor
 import (
 	"fmt"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/configtx"
 	"github.com/hyperledger/fabric/common/crypto"
@@ -17,7 +16,7 @@ import (
 	cb "github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/utils"
 
-	"github.com/pkg/errors"
+	"github.com/golang/protobuf/proto"
 )
 
 // ChannelConfigTemplator can be used to generate config templates.
@@ -42,17 +41,18 @@ func NewSystemChannel(support StandardChannelSupport, templator ChannelConfigTem
 }
 
 // CreateSystemChannelFilters creates the set of filters for the ordering system chain.
+//对接收到的交易信息一次进行过滤处理
 func CreateSystemChannelFilters(chainCreator ChainCreator, ledgerResources channelconfig.Resources) *RuleSet {
 	ordererConfig, ok := ledgerResources.OrdererConfig()
 	if !ok {
 		logger.Panicf("Cannot create system channel filters without orderer config")
 	}
 	return NewRuleSet([]Rule{
-		EmptyRejectRule,
-		NewExpirationRejectRule(ledgerResources),
-		NewSizeFilter(ordererConfig),
-		NewSigFilter(policies.ChannelWriters, ledgerResources),
-		NewSystemChannelFilter(ledgerResources, chainCreator),
+		EmptyRejectRule, //拒绝空消息过滤器
+		NewExpirationRejectRule(ledgerResources), //拒绝过期的签名者身份证书的过滤器
+		NewSizeFilter(ordererConfig), //消息最大字节书过滤器
+		NewSigFilter(policies.ChannelWriters, ledgerResources), //验证消息签名是否满足ChannelWriters通道写权限策略要求的过滤器
+		NewSystemChannelFilter(ledgerResources, chainCreator), //验证系统通道合法消息的过滤器，即检查所接受的消息是否为创建新应用通道的配置交易消息
 	})
 }
 
@@ -78,7 +78,9 @@ func (s *SystemChannel) ProcessNormalMsg(msg *cb.Envelope) (configSeq uint64, er
 // ProcessConfigUpdateMsg handles messages of type CONFIG_UPDATE either for the system channel itself
 // or, for channel creation.  In the channel creation case, the CONFIG_UPDATE is wrapped into a resulting
 // ORDERER_TRANSACTION, and in the standard CONFIG_UPDATE case, a resulting CONFIG message
+//当创建新的应用通道的时候调用
 func (s *SystemChannel) ProcessConfigUpdateMsg(envConfigUpdate *cb.Envelope) (config *cb.Envelope, configSeq uint64, err error) {
+	//获取消息中的通道ID
 	channelID, err := utils.ChannelID(envConfigUpdate)
 	if err != nil {
 		return nil, 0, err
@@ -86,31 +88,41 @@ func (s *SystemChannel) ProcessConfigUpdateMsg(envConfigUpdate *cb.Envelope) (co
 
 	logger.Debugf("Processing config update tx with system channel message processor for channel ID %s", channelID)
 
+	//检查消息中的通道ID与当前的通道的ID是否一致
+	//如果一致，则说明已经已经创建了该通道
 	if channelID == s.support.ChainID() {
+		//交由标准通道处理器处理
 		return s.StandardChannel.ProcessConfigUpdateMsg(envConfigUpdate)
 	}
 
 	// XXX we should check that the signature on the outer envelope is at least valid for some MSP in the system channel
 
+	//继续由系统通道处理器处理创建新应用通道的消息
 	logger.Debugf("Processing channel create tx for channel %s on system channel %s", channelID, s.support.ChainID())
 
 	// If the channel ID does not match the system channel, then this must be a channel creation transaction
 
+	//创建新的应用通道，其通道配置序号默认初始化为0
+	//创建新应用通道的通道配置实体Bundle结构对象（该对象封装了通道配置对象channelConfig、策略管理器policyManager、配置交易管理器configtxManager等）
+	//用于管理新应用通道的通道配置消息等，并且通过自身的配置交易管理器维护通道的配置序号，默认初始化为0
 	bundle, err := s.templator.NewChannelConfig(envConfigUpdate)
 	if err != nil {
 		return nil, 0, err
 	}
 
+	//构造新的通道配置更新交易消息（ConfigEnvelope），注意将消息的通道配置序号更新为1
 	newChannelConfigEnv, err := bundle.ConfigtxValidator().ProposeConfigUpdate(envConfigUpdate)
 	if err != nil {
-		return nil, 0, errors.WithMessage(err, fmt.Sprintf("error validating channel creation transaction for new channel '%s', could not succesfully apply update to template configuration", channelID))
+		return nil, 0, err
 	}
 
+	//创建内层的配置交易消息（CONFIG类型）
 	newChannelEnvConfig, err := utils.CreateSignedEnvelope(cb.HeaderType_CONFIG, channelID, s.support.Signer(), newChannelConfigEnv, msgVersion, epoch)
 	if err != nil {
 		return nil, 0, err
 	}
 
+	//创建外层的配置交易消息（ORDERER——TRANSACTION类型）
 	wrappedOrdererTransaction, err := utils.CreateSignedEnvelope(cb.HeaderType_ORDERER_TRANSACTION, s.support.ChainID(), s.support.Signer(), newChannelEnvConfig, msgVersion, epoch)
 	if err != nil {
 		return nil, 0, err
@@ -121,11 +133,14 @@ func (s *SystemChannel) ProcessConfigUpdateMsg(envConfigUpdate *cb.Envelope) (co
 	// check, which although not strictly necessary, is a good sanity check, in case the orderer
 	// has not been configured with the right cert material.  The additional overhead of the signature
 	// check is negligable, as this is the channel creation path and not the normal path.
+	//应用通道的消息过滤器
+	//利用系统通道消息处理器定义的5个默认消息过滤器检查过滤该消息，如果过滤不包含任何错误，则调用系统通道链支持对象的s.support.Sequence()方法，获取当前通道的最新配置序号
 	err = s.StandardChannel.filters.Apply(wrappedOrdererTransaction)
 	if err != nil {
 		return nil, 0, err
 	}
 
+	//返回新的通道配置交易消息与当前系统通道 配置序号
 	return wrappedOrdererTransaction, s.support.Sequence(), nil
 }
 

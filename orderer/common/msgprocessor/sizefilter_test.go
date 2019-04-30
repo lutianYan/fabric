@@ -13,6 +13,7 @@ import (
 	mockconfig "github.com/hyperledger/fabric/common/mocks/config"
 	cb "github.com/hyperledger/fabric/protos/common"
 	ab "github.com/hyperledger/fabric/protos/orderer"
+
 	"github.com/stretchr/testify/assert"
 )
 

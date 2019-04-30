@@ -2,17 +2,16 @@
 package mock
 
 import (
-	sync "sync"
+	"sync"
 
-	channelconfig "github.com/hyperledger/fabric/common/channelconfig"
+	"github.com/hyperledger/fabric/common/channelconfig"
 )
 
 type OrdererConfigFetcher struct {
 	OrdererConfigStub        func() (channelconfig.Orderer, bool)
 	ordererConfigMutex       sync.RWMutex
-	ordererConfigArgsForCall []struct {
-	}
-	ordererConfigReturns struct {
+	ordererConfigArgsForCall []struct{}
+	ordererConfigReturns     struct {
 		result1 channelconfig.Orderer
 		result2 bool
 	}
@@ -27,8 +26,7 @@ type OrdererConfigFetcher struct {
 func (fake *OrdererConfigFetcher) OrdererConfig() (channelconfig.Orderer, bool) {
 	fake.ordererConfigMutex.Lock()
 	ret, specificReturn := fake.ordererConfigReturnsOnCall[len(fake.ordererConfigArgsForCall)]
-	fake.ordererConfigArgsForCall = append(fake.ordererConfigArgsForCall, struct {
-	}{})
+	fake.ordererConfigArgsForCall = append(fake.ordererConfigArgsForCall, struct{}{})
 	fake.recordInvocation("OrdererConfig", []interface{}{})
 	fake.ordererConfigMutex.Unlock()
 	if fake.OrdererConfigStub != nil {
@@ -37,8 +35,7 @@ func (fake *OrdererConfigFetcher) OrdererConfig() (channelconfig.Orderer, bool) 
 	if specificReturn {
 		return ret.result1, ret.result2
 	}
-	fakeReturns := fake.ordererConfigReturns
-	return fakeReturns.result1, fakeReturns.result2
+	return fake.ordererConfigReturns.result1, fake.ordererConfigReturns.result2
 }
 
 func (fake *OrdererConfigFetcher) OrdererConfigCallCount() int {
@@ -47,15 +44,7 @@ func (fake *OrdererConfigFetcher) OrdererConfigCallCount() int {
 	return len(fake.ordererConfigArgsForCall)
 }
 
-func (fake *OrdererConfigFetcher) OrdererConfigCalls(stub func() (channelconfig.Orderer, bool)) {
-	fake.ordererConfigMutex.Lock()
-	defer fake.ordererConfigMutex.Unlock()
-	fake.OrdererConfigStub = stub
-}
-
 func (fake *OrdererConfigFetcher) OrdererConfigReturns(result1 channelconfig.Orderer, result2 bool) {
-	fake.ordererConfigMutex.Lock()
-	defer fake.ordererConfigMutex.Unlock()
 	fake.OrdererConfigStub = nil
 	fake.ordererConfigReturns = struct {
 		result1 channelconfig.Orderer
@@ -64,8 +53,6 @@ func (fake *OrdererConfigFetcher) OrdererConfigReturns(result1 channelconfig.Ord
 }
 
 func (fake *OrdererConfigFetcher) OrdererConfigReturnsOnCall(i int, result1 channelconfig.Orderer, result2 bool) {
-	fake.ordererConfigMutex.Lock()
-	defer fake.ordererConfigMutex.Unlock()
 	fake.OrdererConfigStub = nil
 	if fake.ordererConfigReturnsOnCall == nil {
 		fake.ordererConfigReturnsOnCall = make(map[int]struct {
