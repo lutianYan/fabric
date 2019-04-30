@@ -13,14 +13,32 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/op/go-logging"
+	"github.com/spf13/viper"
+
 	"github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	"github.com/hyperledger/fabric/msp"
-	"github.com/spf13/viper"
 )
 
 var configLogger = flogging.MustGetLogger("config")
+
+// SetupTestLogging setup the logging during test execution
+func SetupTestLogging() {
+	level, err := logging.LogLevel(viper.GetString("logging.level"))
+	if err == nil {
+		// No error, use the setting
+		logging.SetLevel(level, "main")
+		logging.SetLevel(level, "server")
+		logging.SetLevel(level, "peer")
+	} else {
+		configLogger.Warningf("Log level not recognized '%s', defaulting to %s: %s", viper.GetString("logging.level"), logging.ERROR, err)
+		logging.SetLevel(logging.ERROR, "main")
+		logging.SetLevel(logging.ERROR, "server")
+		logging.SetLevel(logging.ERROR, "peer")
+	}
+}
 
 // SetupTestConfig setup the config during test execution
 func SetupTestConfig() {
@@ -41,6 +59,8 @@ func SetupTestConfig() {
 	if err != nil {            // Handle errors reading the config file
 		panic(fmt.Errorf("Fatal error config file: %s \n", err))
 	}
+
+	SetupTestLogging()
 
 	// Set the number of maxprocs
 	var numProcsDesired = viper.GetInt("peer.gomaxprocs")

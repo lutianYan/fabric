@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"github.com/hyperledger/fabric/core/common/privdata"
+	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/msp"
 	"github.com/hyperledger/fabric/protos/common"
 )
 
@@ -28,9 +30,9 @@ type BTLPolicy interface {
 // This implementation loads the BTL policy from lscc namespace which is populated
 // with the collection configuration during chaincode initialization
 type LSCCBasedBTLPolicy struct {
-	collInfoProvider collectionInfoProvider
-	cache            map[btlkey]uint64
-	lock             sync.Mutex
+	collectionStore privdata.CollectionStore
+	cache           map[btlkey]uint64
+	lock            sync.Mutex
 }
 
 type btlkey struct {
@@ -38,12 +40,16 @@ type btlkey struct {
 	coll string
 }
 
+// NewBTLPolicy constructs an instance of LSCCBasedBTLPolicy
+func NewBTLPolicy(ledger ledger.PeerLedger) BTLPolicy {
+	return ConstructBTLPolicy(privdata.NewSimpleCollectionStore(&collectionSupport{lgr: ledger}))
+}
+
 // ConstructBTLPolicy constructs an instance of LSCCBasedBTLPolicy
-func ConstructBTLPolicy(collInfoProvider collectionInfoProvider) BTLPolicy {
+func ConstructBTLPolicy(collectionStore privdata.CollectionStore) BTLPolicy {
 	return &LSCCBasedBTLPolicy{
-		collInfoProvider: collInfoProvider,
-		cache:            make(map[btlkey]uint64),
-	}
+		collectionStore: collectionStore,
+		cache:           make(map[btlkey]uint64)}
 }
 
 // GetBTL implements corresponding function in interface `BTLPolicyMgr`
@@ -55,14 +61,12 @@ func (p *LSCCBasedBTLPolicy) GetBTL(namesapce string, collection string) (uint64
 	defer p.lock.Unlock()
 	btl, ok = p.cache[key]
 	if !ok {
-		collConfig, err := p.collInfoProvider.CollectionInfo(namesapce, collection)
+		persistenceConf, err := p.collectionStore.RetrieveCollectionPersistenceConfigs(
+			common.CollectionCriteria{Namespace: namesapce, Collection: collection})
 		if err != nil {
 			return 0, err
 		}
-		if collConfig == nil {
-			return 0, privdata.NoSuchCollectionError{Namespace: namesapce, Collection: collection}
-		}
-		btlConfigured := collConfig.BlockToLive
+		btlConfigured := persistenceConf.BlockToLive()
 		if btlConfigured > 0 {
 			btl = uint64(btlConfigured)
 		} else {
@@ -86,8 +90,14 @@ func (p *LSCCBasedBTLPolicy) GetExpiringBlock(namesapce string, collection strin
 	return expiryBlk, nil
 }
 
-type collectionInfoProvider interface {
-	CollectionInfo(chaincodeName, collectionName string) (*common.StaticCollectionConfig, error)
+type collectionSupport struct {
+	lgr ledger.PeerLedger
 }
 
-//go:generate counterfeiter -o mock/coll_info_provider.go -fake-name CollectionInfoProvider . collectionInfoProvider
+func (cs *collectionSupport) GetQueryExecutorForLedger(cid string) (ledger.QueryExecutor, error) {
+	return cs.lgr.NewQueryExecutor()
+}
+
+func (*collectionSupport) GetIdentityDeserializer(chainID string) msp.IdentityDeserializer {
+	return nil
+}

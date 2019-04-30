@@ -10,7 +10,6 @@ import (
 	"os"
 	"testing"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage/fsblkstorage"
@@ -20,16 +19,14 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/pvtdatapolicy"
 	btltestutil "github.com/hyperledger/fabric/core/ledger/pvtdatapolicy/testutil"
 	"github.com/hyperledger/fabric/core/ledger/pvtdatastorage"
-	lutil "github.com/hyperledger/fabric/core/ledger/util"
-	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/ledger/rwset"
-	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMain(m *testing.M) {
-	flogging.ActivateSpec("ledgerstorage,pvtdatastorage=debug")
+	flogging.SetModuleLevel("ledgerstorage", "debug")
+	flogging.SetModuleLevel("pvtdatastorage", "debug")
 	viper.Set("peer.fileSystemPath", "/tmp/fabric/core/ledger/ledgerstorage")
 	os.Exit(m.Run())
 }
@@ -59,9 +56,7 @@ func TestStore(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, pvtdata)
 
-	// block 2 has pvt data for tx 3, 5 and 6. However, tx 6
-	// is marked as invalid in the block and hence should not
-	// have been stored
+	// block 2 has pvt data for tx 3 and 5 only
 	pvtdata, err = store.GetPvtDataByNum(2, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(pvtdata))
@@ -77,11 +72,11 @@ func TestStore(t *testing.T) {
 
 	blockAndPvtdata, err := store.GetPvtDataAndBlockByNum(2, nil)
 	assert.NoError(t, err)
-	assert.True(t, proto.Equal(sampleData[2].Block, blockAndPvtdata.Block))
+	assert.Equal(t, sampleData[2], blockAndPvtdata)
 
 	blockAndPvtdata, err = store.GetPvtDataAndBlockByNum(3, nil)
 	assert.NoError(t, err)
-	assert.True(t, proto.Equal(sampleData[3].Block, blockAndPvtdata.Block))
+	assert.Equal(t, sampleData[3], blockAndPvtdata)
 
 	// pvt data retrieval for block 3 with filter should return filtered pvtdata
 	filter := ledger.NewPvtNsCollFilter()
@@ -90,21 +85,12 @@ func TestStore(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, sampleData[3].Block, blockAndPvtdata.Block)
 	// two transactions should be present
-	assert.Equal(t, 2, len(blockAndPvtdata.PvtData))
+	assert.Equal(t, 2, len(blockAndPvtdata.BlockPvtData))
 	// both tran number 4 and 6 should have only one collection because of filter
-	assert.Equal(t, 1, len(blockAndPvtdata.PvtData[4].WriteSet.NsPvtRwset))
-	assert.Equal(t, 1, len(blockAndPvtdata.PvtData[6].WriteSet.NsPvtRwset))
+	assert.Equal(t, 1, len(blockAndPvtdata.BlockPvtData[4].WriteSet.NsPvtRwset))
+	assert.Equal(t, 1, len(blockAndPvtdata.BlockPvtData[6].WriteSet.NsPvtRwset))
 	// any other transaction entry should be nil
-	assert.Nil(t, blockAndPvtdata.PvtData[2])
-
-	// test missing data retrieval in the presence of invalid tx. Block 5 had
-	// missing data (for tx4 and tx5). However, tx5 was marked as invalid tx.
-	// Hence, only tx4's missing data should be returned
-	expectedMissingDataInfo := make(ledger.MissingPvtDataInfo)
-	expectedMissingDataInfo.Add(5, 4, "ns-4", "coll-4")
-	missingDataInfo, err := store.GetMissingPvtDataInfoForMostRecentBlocks(1)
-	assert.NoError(t, err)
-	assert.Equal(t, expectedMissingDataInfo, missingDataInfo)
+	assert.Nil(t, blockAndPvtdata.BlockPvtData[2])
 }
 
 func TestStoreWithExistingBlockchain(t *testing.T) {
@@ -154,7 +140,7 @@ func TestStoreWithExistingBlockchain(t *testing.T) {
 
 	// Add one more block with ovtdata associated with one of the trans and commit in the normal course
 	pvtdata := samplePvtData(t, []uint64{0})
-	assert.NoError(t, store.CommitWithPvtData(&ledger.BlockAndPvtData{Block: blockToAdd, PvtData: pvtdata}))
+	assert.NoError(t, store.CommitWithPvtData(&ledger.BlockAndPvtData{Block: blockToAdd, BlockPvtData: pvtdata}))
 	pvtdataBlockHt, err = store.pvtdataStore.LastCommittedBlockHeight()
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(10), pvtdataBlockHt)
@@ -179,11 +165,11 @@ func TestCrashAfterPvtdataStorePreparation(t *testing.T) {
 	}
 	blokNumAtCrash := dataAtCrash.Block.Header.Number
 	var pvtdataAtCrash []*ledger.TxPvtData
-	for _, p := range dataAtCrash.PvtData {
+	for _, p := range dataAtCrash.BlockPvtData {
 		pvtdataAtCrash = append(pvtdataAtCrash, p)
 	}
 	// Only call Prepare on pvt data store and mimic a crash
-	store.pvtdataStore.Prepare(blokNumAtCrash, pvtdataAtCrash, nil)
+	store.pvtdataStore.Prepare(blokNumAtCrash, pvtdataAtCrash)
 	store.Shutdown()
 	provider.Close()
 	provider = NewProvider()
@@ -200,19 +186,7 @@ func TestCrashAfterPvtdataStorePreparation(t *testing.T) {
 	assert.NoError(t, store.CommitWithPvtData(dataAtCrash))
 	pvtdata, err := store.GetPvtDataByNum(blokNumAtCrash, nil)
 	assert.NoError(t, err)
-	constructed := constructPvtdataMap(pvtdata)
-	for k, v := range dataAtCrash.PvtData {
-		ov, ok := constructed[k]
-		assert.True(t, ok)
-		assert.Equal(t, v.SeqInBlock, ov.SeqInBlock)
-		assert.True(t, proto.Equal(v.WriteSet, ov.WriteSet))
-	}
-	for k, v := range constructed {
-		ov, ok := dataAtCrash.PvtData[k]
-		assert.True(t, ok)
-		assert.Equal(t, v.SeqInBlock, ov.SeqInBlock)
-		assert.True(t, proto.Equal(v.WriteSet, ov.WriteSet))
-	}
+	assert.Equal(t, dataAtCrash.BlockPvtData, constructPvtdataMap(pvtdata))
 }
 
 func TestCrashBeforePvtdataStoreCommit(t *testing.T) {
@@ -234,13 +208,13 @@ func TestCrashBeforePvtdataStoreCommit(t *testing.T) {
 	}
 	blokNumAtCrash := dataAtCrash.Block.Header.Number
 	var pvtdataAtCrash []*ledger.TxPvtData
-	for _, p := range dataAtCrash.PvtData {
+	for _, p := range dataAtCrash.BlockPvtData {
 		pvtdataAtCrash = append(pvtdataAtCrash, p)
 	}
 
 	// Mimic a crash just short of calling the final commit on pvtdata store
 	// After starting the store again, the block and the pvtdata should be available
-	store.pvtdataStore.Prepare(blokNumAtCrash, pvtdataAtCrash, nil)
+	store.pvtdataStore.Prepare(blokNumAtCrash, pvtdataAtCrash)
 	store.BlockStore.AddBlock(dataAtCrash.Block)
 	store.Shutdown()
 	provider.Close()
@@ -250,8 +224,7 @@ func TestCrashBeforePvtdataStoreCommit(t *testing.T) {
 	store.Init(btlPolicyForSampleData())
 	blkAndPvtdata, err := store.GetPvtDataAndBlockByNum(blokNumAtCrash, nil)
 	assert.NoError(t, err)
-	assert.Equal(t, dataAtCrash.MissingPvtData, blkAndPvtdata.MissingPvtData)
-	assert.True(t, proto.Equal(dataAtCrash.Block, blkAndPvtdata.Block))
+	assert.Equal(t, dataAtCrash, blkAndPvtdata)
 }
 
 func TestAddAfterPvtdataStoreError(t *testing.T) {
@@ -330,25 +303,10 @@ func sampleDataWithPvtdataForSelectiveTx(t *testing.T) []*ledger.BlockAndPvtData
 	for i := 0; i < 10; i++ {
 		blockAndpvtdata = append(blockAndpvtdata, &ledger.BlockAndPvtData{Block: blocks[i]})
 	}
-
-	// txNum 3, 5, 6 in block 2 has pvtdata but txNum 6 is invalid
-	blockAndpvtdata[2].PvtData = samplePvtData(t, []uint64{3, 5, 6})
-	txFilter := lutil.TxValidationFlags(blockAndpvtdata[2].Block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
-	txFilter.SetFlag(6, pb.TxValidationCode_INVALID_WRITESET)
-	blockAndpvtdata[2].Block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txFilter
-
+	// txNum 3, 5 in block 2 has pvtdata
+	blockAndpvtdata[2].BlockPvtData = samplePvtData(t, []uint64{3, 5})
 	// txNum 4, 6 in block 3 has pvtdata
-	blockAndpvtdata[3].PvtData = samplePvtData(t, []uint64{4, 6})
-
-	// txNum 4, 5 in block 5 has missing pvt data but txNum 5 is invalid
-	missingData := make(ledger.TxMissingPvtDataMap)
-	missingData.Add(4, "ns-4", "coll-4", true)
-	missingData.Add(5, "ns-5", "coll-5", true)
-	blockAndpvtdata[5].MissingPvtData = missingData
-	txFilter = lutil.TxValidationFlags(blockAndpvtdata[5].Block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
-	txFilter.SetFlag(5, pb.TxValidationCode_INVALID_WRITESET)
-	blockAndpvtdata[5].Block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txFilter
-
+	blockAndpvtdata[3].BlockPvtData = samplePvtData(t, []uint64{4, 6})
 	return blockAndpvtdata
 }
 
@@ -358,8 +316,8 @@ func sampleDataWithPvtdataForAllTxs(t *testing.T) []*ledger.BlockAndPvtData {
 	for i := 0; i < 10; i++ {
 		blockAndpvtdata = append(blockAndpvtdata,
 			&ledger.BlockAndPvtData{
-				Block:   blocks[i],
-				PvtData: samplePvtData(t, []uint64{uint64(i), uint64(i + 1)}),
+				Block:        blocks[i],
+				BlockPvtData: samplePvtData(t, []uint64{uint64(i), uint64(i + 1)}),
 			},
 		)
 	}
@@ -391,10 +349,8 @@ func samplePvtData(t *testing.T, txNums []uint64) map[uint64]*ledger.TxPvtData {
 }
 
 func btlPolicyForSampleData() pvtdatapolicy.BTLPolicy {
-	return btltestutil.SampleBTLPolicy(
-		map[[2]string]uint64{
-			{"ns-1", "coll-1"}: 0,
-			{"ns-1", "coll-2"}: 0,
-		},
-	)
+	cs := btltestutil.NewMockCollectionStore()
+	cs.SetBTL("ns-1", "coll-1", 0)
+	cs.SetBTL("ns-1", "coll-2", 0)
+	return pvtdatapolicy.ConstructBTLPolicy(cs)
 }

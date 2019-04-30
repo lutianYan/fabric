@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package deliverclient
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -18,6 +17,7 @@ import (
 	"github.com/hyperledger/fabric/core/deliverservice/blocksprovider"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/orderer"
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
 
@@ -36,17 +36,16 @@ type retryPolicy func(attemptNum int, elapsedTime time.Duration) (time.Duration,
 type clientFactory func(*grpc.ClientConn) orderer.AtomicBroadcastClient
 
 type broadcastClient struct {
-	stopFlag     int32
+	stopFlag int32
+	sync.Mutex
 	stopChan     chan struct{}
 	createClient clientFactory
 	shouldRetry  retryPolicy
 	onConnect    broadcastSetup
 	prod         comm.ConnectionProducer
-
-	mutex           sync.Mutex
-	blocksDeliverer blocksprovider.BlocksDeliverer
-	conn            *connection
-	endpoint        string
+	blocksprovider.BlocksDeliverer
+	conn     *connection
+	endpoint string
 }
 
 // NewBroadcastClient returns a broadcastClient with the given params
@@ -60,7 +59,8 @@ func (bc *broadcastClient) Recv() (*orderer.DeliverResponse, error) {
 		if bc.shouldStop() {
 			return nil, errors.New("closing")
 		}
-		return bc.tryReceive()
+		//接收消息（此时BlocksDeliverer还没有被赋值）
+		return bc.BlocksDeliverer.Recv()
 	})
 	if err != nil {
 		return nil, err
@@ -74,29 +74,9 @@ func (bc *broadcastClient) Send(msg *common.Envelope) error {
 		if bc.shouldStop() {
 			return nil, errors.New("closing")
 		}
-		return bc.trySend(msg)
+		return nil, bc.BlocksDeliverer.Send(msg)
 	})
 	return err
-}
-
-func (bc *broadcastClient) trySend(msg *common.Envelope) (interface{}, error) {
-	bc.mutex.Lock()
-	stream := bc.blocksDeliverer
-	bc.mutex.Unlock()
-	if stream == nil {
-		return nil, errors.New("client stream has been closed")
-	}
-	return nil, stream.Send(msg)
-}
-
-func (bc *broadcastClient) tryReceive() (*orderer.DeliverResponse, error) {
-	bc.mutex.Lock()
-	stream := bc.blocksDeliverer
-	bc.mutex.Unlock()
-	if stream == nil {
-		return nil, errors.New("client stream has been closed")
-	}
-	return stream.Recv()
 }
 
 func (bc *broadcastClient) try(action func() (interface{}, error)) (interface{}, error) {
@@ -109,6 +89,7 @@ func (bc *broadcastClient) try(action func() (interface{}, error)) (interface{},
 		totalRetryTime = 0
 	}
 	for retry && !bc.shouldStop() {
+		//这个action是上一步传入的接收消息的动作
 		resp, err := bc.doAction(action, resetAttemptCounter)
 		if err != nil {
 			attempt++
@@ -129,18 +110,16 @@ func (bc *broadcastClient) try(action func() (interface{}, error)) (interface{},
 	}
 	return nil, fmt.Errorf("attempts (%d) or elapsed time (%v) exhausted", attempt, totalRetryTime)
 }
-
+//会首先查看连接conn是否已经建立，此时没有建立，则会调用bc.connect()建立连接。随后resp, err := action()执行action动作。
 func (bc *broadcastClient) doAction(action func() (interface{}, error), actionOnNewConnection func()) (interface{}, error) {
-	bc.mutex.Lock()
-	conn := bc.conn
-	bc.mutex.Unlock()
-	if conn == nil {
+	if bc.conn == nil {
 		err := bc.connect()
 		if err != nil {
 			return nil, err
 		}
 		actionOnNewConnection()
 	}
+	//开始接收orderer结点发来的block数据
 	resp, err := action()
 	if err != nil {
 		bc.Disconnect(false)
@@ -157,24 +136,25 @@ func (bc *broadcastClient) sleep(duration time.Duration) {
 }
 
 func (bc *broadcastClient) connect() error {
-	bc.mutex.Lock()
 	bc.endpoint = ""
-	bc.mutex.Unlock()
+	//建立了一个连接orderer结点的grpc连接
 	conn, endpoint, err := bc.prod.NewConnection()
 	logger.Debug("Connected to", endpoint)
 	if err != nil {
 		logger.Error("Failed obtaining connection:", err)
 		return err
 	}
+	//创建context上下文对象
 	ctx, cf := context.WithCancel(context.Background())
 	logger.Debug("Establishing gRPC stream with", endpoint, "...")
+	//使用建立的grpc连接创建了一个Deliver服务客户端，随后调用了bc.afterConnect(conn, abc, cf)
 	abc, err := bc.createClient(conn).Deliver(ctx)
 	if err != nil {
 		logger.Error("Connection to ", endpoint, "established but was unable to create gRPC stream:", err)
 		conn.Close()
-		cf()
 		return err
 	}
+	//创建与orderer结点的连接和Deliver客户端分别赋值给broadcastClient的conn
 	err = bc.afterConnect(conn, abc, cf, endpoint)
 	if err == nil {
 		return nil
@@ -182,30 +162,34 @@ func (bc *broadcastClient) connect() error {
 	logger.Warning("Failed running post-connection procedures:", err)
 	// If we reached here, lets make sure connection is closed
 	// and nullified before we return
+	//如果程序执行到这里，则确认链接已经关闭
 	bc.Disconnect(false)
 	return err
 }
 
+//依次设置broadcastClient客户端的成员对象，包括Orderer服务节点endpoint，链接对象conn（包括grpc链接对象conn与context上下文对象取消函数cf等）、Deliver服务客户端abc（atomicBroadcastDeliverClient类型，实现了BlockDelivers接口）
 func (bc *broadcastClient) afterConnect(conn *grpc.ClientConn, abc orderer.AtomicBroadcast_DeliverClient, cf context.CancelFunc, endpoint string) error {
 	logger.Debug("Entering")
 	defer logger.Debug("Exiting")
-	bc.mutex.Lock()
+	bc.Lock()
 	bc.endpoint = endpoint
 	bc.conn = &connection{ClientConn: conn, cancel: cf}
-	bc.blocksDeliverer = abc
+	//给BlocksDeliverer赋值
+	bc.BlocksDeliverer = abc
 	if bc.shouldStop() {
-		bc.mutex.Unlock()
+		bc.Unlock()
 		return errors.New("closing")
 	}
-	bc.mutex.Unlock()
+	bc.Unlock()
 	// If the client is closed at this point- before onConnect,
 	// any use of this object by onConnect would return an error.
+	//调用bc.onConnect(bc)，这个onConnect就是broadcastSetup
 	err := bc.onConnect(bc)
 	// If the client is closed right after onConnect, but before
 	// the following lock- this method would return an error because
 	// the client has been closed.
-	bc.mutex.Lock()
-	defer bc.mutex.Unlock()
+	bc.Lock()
+	defer bc.Unlock()
 	if bc.shouldStop() {
 		return errors.New("closing")
 	}
@@ -229,8 +213,8 @@ func (bc *broadcastClient) shouldStop() bool {
 func (bc *broadcastClient) Close() {
 	logger.Debug("Entering")
 	defer logger.Debug("Exiting")
-	bc.mutex.Lock()
-	defer bc.mutex.Unlock()
+	bc.Lock()
+	defer bc.Unlock()
 	if bc.shouldStop() {
 		return
 	}
@@ -247,8 +231,8 @@ func (bc *broadcastClient) Close() {
 func (bc *broadcastClient) Disconnect(disableEndpoint bool) {
 	logger.Debug("Entering")
 	defer logger.Debug("Exiting")
-	bc.mutex.Lock()
-	defer bc.mutex.Unlock()
+	bc.Lock()
+	defer bc.Unlock()
 	if disableEndpoint && bc.endpoint != "" {
 		bc.prod.DisableEndpoint(bc.endpoint)
 	}
@@ -258,7 +242,7 @@ func (bc *broadcastClient) Disconnect(disableEndpoint bool) {
 	}
 	bc.conn.Close()
 	bc.conn = nil
-	bc.blocksDeliverer = nil
+	bc.BlocksDeliverer = nil
 }
 
 // UpdateEndpoints update endpoints to new values

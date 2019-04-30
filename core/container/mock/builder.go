@@ -2,16 +2,15 @@
 package mock
 
 import (
-	io "io"
-	sync "sync"
+	"io"
+	"sync"
 )
 
 type Builder struct {
 	BuildStub        func() (io.Reader, error)
 	buildMutex       sync.RWMutex
-	buildArgsForCall []struct {
-	}
-	buildReturns struct {
+	buildArgsForCall []struct{}
+	buildReturns     struct {
 		result1 io.Reader
 		result2 error
 	}
@@ -26,8 +25,7 @@ type Builder struct {
 func (fake *Builder) Build() (io.Reader, error) {
 	fake.buildMutex.Lock()
 	ret, specificReturn := fake.buildReturnsOnCall[len(fake.buildArgsForCall)]
-	fake.buildArgsForCall = append(fake.buildArgsForCall, struct {
-	}{})
+	fake.buildArgsForCall = append(fake.buildArgsForCall, struct{}{})
 	fake.recordInvocation("Build", []interface{}{})
 	fake.buildMutex.Unlock()
 	if fake.BuildStub != nil {
@@ -36,8 +34,7 @@ func (fake *Builder) Build() (io.Reader, error) {
 	if specificReturn {
 		return ret.result1, ret.result2
 	}
-	fakeReturns := fake.buildReturns
-	return fakeReturns.result1, fakeReturns.result2
+	return fake.buildReturns.result1, fake.buildReturns.result2
 }
 
 func (fake *Builder) BuildCallCount() int {
@@ -46,15 +43,7 @@ func (fake *Builder) BuildCallCount() int {
 	return len(fake.buildArgsForCall)
 }
 
-func (fake *Builder) BuildCalls(stub func() (io.Reader, error)) {
-	fake.buildMutex.Lock()
-	defer fake.buildMutex.Unlock()
-	fake.BuildStub = stub
-}
-
 func (fake *Builder) BuildReturns(result1 io.Reader, result2 error) {
-	fake.buildMutex.Lock()
-	defer fake.buildMutex.Unlock()
 	fake.BuildStub = nil
 	fake.buildReturns = struct {
 		result1 io.Reader
@@ -63,8 +52,6 @@ func (fake *Builder) BuildReturns(result1 io.Reader, result2 error) {
 }
 
 func (fake *Builder) BuildReturnsOnCall(i int, result1 io.Reader, result2 error) {
-	fake.buildMutex.Lock()
-	defer fake.buildMutex.Unlock()
 	fake.BuildStub = nil
 	if fake.buildReturnsOnCall == nil {
 		fake.buildReturnsOnCall = make(map[int]struct {

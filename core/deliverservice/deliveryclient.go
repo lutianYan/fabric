@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package deliverclient
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -20,11 +19,17 @@ import (
 	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/util"
 	"github.com/hyperledger/fabric/protos/orderer"
+	"github.com/op/go-logging"
 	"github.com/spf13/viper"
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
 
-var logger = flogging.MustGetLogger("deliveryClient")
+var logger *logging.Logger // package-level logger
+
+func init() {
+	logger = flogging.MustGetLogger("deliveryClient")
+}
 
 const (
 	defaultReConnectTotalTimeThreshold = time.Second * 60 * 60
@@ -42,10 +47,6 @@ func getConnectionTimeout() time.Duration {
 
 func getReConnectBackoffThreshold() float64 {
 	return util.GetFloat64OrDefault("peer.deliveryclient.reConnectBackoffThreshold", defaultReConnectBackoffThreshold)
-}
-
-func staticRootsEnabled() bool {
-	return viper.GetBool("peer.deliveryclient.staticRootsEnabled")
 }
 
 // DeliverService used to communicate with orderers to obtain
@@ -100,6 +101,7 @@ type Config struct {
 // delivery service instance. It tries to establish connection to
 // the specified in the configuration ordering service, in case it
 // fails to dial to it, return nil
+//构造Deliver服务客户端配置信息(deliverclient.Config类型)，再创建指定应用通道上的Deliver服务实例（deliverServiceImpl类型），并验证配置信息
 func NewDeliverService(conf *Config) (DeliverService, error) {
 	ds := &deliverServiceImpl{
 		conf:           conf,
@@ -146,6 +148,7 @@ func (d *deliverServiceImpl) validateConfiguration() error {
 // initializes the grpc stream for given chainID, creates blocks provider instance
 // that spawns in go routine to read new blocks starting from the position provided by ledger
 // info instance.
+//建立连接和索要行为只会发生一次。
 func (d *deliverServiceImpl) StartDeliverForChannel(chainID string, ledgerInfo blocksprovider.LedgerInfo, finalizer func()) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
@@ -154,14 +157,21 @@ func (d *deliverServiceImpl) StartDeliverForChannel(chainID string, ledgerInfo b
 		logger.Errorf(errMsg)
 		return errors.New(errMsg)
 	}
+	//获取绑定指定通道的区块提供者
 	if _, exist := d.blockProviders[chainID]; exist {
+		//如果已经存在，则报错
 		errMsg := fmt.Sprintf("Delivery service - block provider already exists for %s found, can't start delivery", chainID)
 		logger.Errorf(errMsg)
 		return errors.New(errMsg)
 	} else {
+		//如果不存在区块提供者
+
+		//创建Deliver服务实例上的broadcastClient客户端
 		client := d.newClient(chainID, ledgerInfo)
 		logger.Debug("This peer will pass blocks from orderer service to other peers for channel", chainID)
+		//创建指定通道关联的区块提供者
 		d.blockProviders[chainID] = blocksprovider.NewBlocksProvider(chainID, client, d.conf.Gossip, d.conf.CryptoSvc)
+		//请求获取区块数据
 		go d.launchBlockProvider(chainID, finalizer)
 	}
 	return nil
@@ -212,26 +222,33 @@ func (d *deliverServiceImpl) Stop() {
 	}
 }
 
+//创建指定通道的broadcastClient结构客户端，用于与Orderer节点建立链接，以发送请求与接受区块数据结果
 func (d *deliverServiceImpl) newClient(chainID string, ledgerInfoProvider blocksprovider.LedgerInfo) *broadcastClient {
-	reconnectBackoffThreshold := getReConnectBackoffThreshold()
-	reconnectTotalTimeThreshold := getReConnectTotalTimeThreshold()
+	//定义区块请求者blockRequester结构对象
 	requester := &blocksRequester{
 		tls:     viper.GetBool("peer.tls.enabled"),
 		chainID: chainID,
 	}
+	//调用RequestBlocks()
+	//定义broadcastSetup方法
 	broadcastSetup := func(bd blocksprovider.BlocksDeliverer) error {
+		//请求区块数据
 		return requester.RequestBlocks(ledgerInfoProvider)
 	}
 	backoffPolicy := func(attemptNum int, elapsedTime time.Duration) (time.Duration, bool) {
-		if elapsedTime >= reconnectTotalTimeThreshold {
+		if elapsedTime.Nanoseconds() > getReConnectTotalTimeThreshold().Nanoseconds() {
 			return 0, false
 		}
 		sleepIncrement := float64(time.Millisecond * 500)
 		attempt := float64(attemptNum)
-		return time.Duration(math.Min(math.Pow(2, attempt)*sleepIncrement, reconnectBackoffThreshold)), true
+		return time.Duration(math.Min(math.Pow(2, attempt)*sleepIncrement, getReConnectBackoffThreshold())), true
 	}
+	//创建connProducer对象
 	connProd := comm.NewConnectionProducer(d.conf.ConnFactory(chainID), d.conf.Endpoints)
+	//broadcastSetup作为参数传递给NewBroadcastClient
+	//创建broadcastClient客户端
 	bClient := NewBroadcastClient(connProd, d.conf.ABCFactory, broadcastSetup, backoffPolicy)
+	//设置区块请求者对象的客户端
 	requester.client = bClient
 	return bClient
 }
@@ -255,7 +272,7 @@ func DefaultConnectionFactory(channelID string) func(endpoint string) (*grpc.Cli
 		dialOpts = append(dialOpts, comm.ClientKeepaliveOptions(kaOpts)...)
 
 		if viper.GetBool("peer.tls.enabled") {
-			creds, err := comm.GetCredentialSupport().GetDeliverServiceCredentials(channelID, staticRootsEnabled())
+			creds, err := comm.GetCredentialSupport().GetDeliverServiceCredentials(channelID)
 			if err != nil {
 				return nil, fmt.Errorf("failed obtaining credentials for channel %s: %v", channelID, err)
 			}
@@ -263,8 +280,9 @@ func DefaultConnectionFactory(channelID string) func(endpoint string) (*grpc.Cli
 		} else {
 			dialOpts = append(dialOpts, grpc.WithInsecure())
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), getConnectionTimeout())
-		defer cancel()
+		grpc.EnableTracing = true
+		ctx := context.Background()
+		ctx, _ = context.WithTimeout(ctx, getConnectionTimeout())
 		return grpc.DialContext(ctx, endpoint, dialOpts...)
 	}
 }

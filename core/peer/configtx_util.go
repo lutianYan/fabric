@@ -36,6 +36,7 @@ func deserialize(serializedConf []byte) (*common.Config, error) {
 }
 
 // retrievePersistedChannelConfig retrieves the persisted channel config from statedb
+//从statedb中检索持久化的channel配置
 func retrievePersistedChannelConfig(ledger ledger.PeerLedger) (*common.Config, error) {
 	qe, err := ledger.NewQueryExecutor()
 	if err != nil {

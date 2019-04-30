@@ -21,7 +21,7 @@ type Subscription struct {
 	lc             *Lifecycle
 	channel        string
 	queryCreator   QueryCreator
-	pendingUpdates []*cceventmgmt.ChaincodeDefinition
+	pendingUpdates chan *cceventmgmt.ChaincodeDefinition
 }
 
 type depCCsRetriever func(Query, ChaincodePredicate, bool, ...string) (chaincode.MetadataSet, error)
@@ -30,9 +30,7 @@ type depCCsRetriever func(Query, ChaincodePredicate, bool, ...string) (chaincode
 // installed on the peer. This also gets invoked when an already deployed chaincode is installed on the peer
 func (sub *Subscription) HandleChaincodeDeploy(chaincodeDefinition *cceventmgmt.ChaincodeDefinition, dbArtifactsTar []byte) error {
 	Logger.Debug("Channel", sub.channel, "got a new deployment:", chaincodeDefinition)
-	sub.Lock()
-	defer sub.Unlock()
-	sub.pendingUpdates = append(sub.pendingUpdates, chaincodeDefinition)
+	sub.pendingUpdates <- chaincodeDefinition
 	return nil
 }
 
@@ -66,18 +64,14 @@ func (sub *Subscription) ChaincodeDeployDone(succeeded bool) {
 	// We first lock and then take the pending update, to preserve order.
 	sub.Lock()
 	go func() {
-		defer func() {
-			sub.pendingUpdates = nil
-			sub.Unlock()
-		}()
+		defer sub.Unlock()
+		update := <-sub.pendingUpdates
 		// If we haven't succeeded in deploying the chaincode, just skip the update
 		if !succeeded {
-			Logger.Errorf("Chaincode deploy for updates %v failed", sub.pendingUpdates)
+			Logger.Error("Chaincode deploy for", update.Name, "failed")
 			return
 		}
-		for _, update := range sub.pendingUpdates {
-			sub.processPendingUpdate(update)
-		}
+		sub.processPendingUpdate(update)
 	}()
 }
 

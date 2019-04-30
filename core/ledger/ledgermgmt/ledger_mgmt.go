@@ -1,85 +1,73 @@
 /*
-Copyright IBM Corp. All Rights Reserved.
+Copyright IBM Corp. 2016 All Rights Reserved.
 
-SPDX-License-Identifier: Apache-2.0
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+		 http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
-
+//打开关闭文件这些繁琐的操作，偏向管理的操作（因为一般的联盟链用户并不会用到这些操作），可以将其封装为管理组件
+//初始化与账本相关的对象
 package ledgermgmt
 
 import (
-	"bytes"
+	"errors"
 	"sync"
 
-	"github.com/hyperledger/fabric/common/flogging"
-	"github.com/hyperledger/fabric/common/metrics"
-	"github.com/hyperledger/fabric/core/chaincode/platforms"
-	"github.com/hyperledger/fabric/core/common/ccprovider"
-	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/cceventmgmt"
+
+	"fmt"
+
+	"github.com/hyperledger/fabric/common/flogging"
+	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/customtx"
 	"github.com/hyperledger/fabric/core/ledger/kvledger"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/utils"
-	"github.com/pkg/errors"
 )
 
 var logger = flogging.MustGetLogger("ledgermgmt")
 
 // ErrLedgerAlreadyOpened is thrown by a CreateLedger call if a ledger with the given id is already opened
-var ErrLedgerAlreadyOpened = errors.New("ledger already opened")
+var ErrLedgerAlreadyOpened = errors.New("Ledger already opened")
 
 // ErrLedgerMgmtNotInitialized is thrown when ledger mgmt is used before initializing this
 var ErrLedgerMgmtNotInitialized = errors.New("ledger mgmt should be initialized before using")
 
-var openedLedgers map[string]ledger.PeerLedger
+var openedLedgers map[string]ledger.PeerLedger//记录打开的账本
 var ledgerProvider ledger.PeerLedgerProvider
 var lock sync.Mutex
 var initialized bool
 var once sync.Once
 
-// Initializer encapsulates all the external dependencies for the ledger module
-type Initializer struct {
-	CustomTxProcessors            customtx.Processors
-	PlatformRegistry              *platforms.Registry
-	DeployedChaincodeInfoProvider ledger.DeployedChaincodeInfoProvider
-	MembershipInfoProvider        ledger.MembershipInfoProvider
-	MetricsProvider               metrics.Provider
-	HealthCheckRegistry           ledger.HealthCheckRegistry
-}
-
 // Initialize initializes ledgermgmt
-func Initialize(initializer *Initializer) {
+func Initialize(customTxProcessors customtx.Processors) {
 	once.Do(func() {
-		initialize(initializer)
+		initialize(customTxProcessors, nil)
 	})
 }
 
-func initialize(initializer *Initializer) {
+func initialize(customTxProcessors customtx.Processors, statelisteners []ledger.StateListener) {
 	logger.Info("Initializing ledger mgmt")
 	lock.Lock()
 	defer lock.Unlock()
 	initialized = true
 	openedLedgers = make(map[string]ledger.PeerLedger)
-	customtx.Initialize(initializer.CustomTxProcessors)
-	cceventmgmt.Initialize(&chaincodeInfoProviderImpl{
-		initializer.PlatformRegistry,
-		initializer.DeployedChaincodeInfoProvider,
-	})
-	finalStateListeners := addListenerForCCEventsHandler(initializer.DeployedChaincodeInfoProvider, []ledger.StateListener{})
+	customtx.Initialize(customTxProcessors)
+	cceventmgmt.Initialize()
+	finalStateListeners := addListenerForCCEventsHandler(statelisteners)
 	provider, err := kvledger.NewProvider()
 	if err != nil {
-		panic(errors.WithMessage(err, "Error in instantiating ledger provider"))
+		panic(fmt.Errorf("Error in instantiating ledger provider: %s", err))
 	}
-	err = provider.Initialize(&ledger.Initializer{
-		StateListeners:                finalStateListeners,
-		DeployedChaincodeInfoProvider: initializer.DeployedChaincodeInfoProvider,
-		MembershipInfoProvider:        initializer.MembershipInfoProvider,
-		MetricsProvider:               initializer.MetricsProvider,
-		HealthCheckRegistry:           initializer.HealthCheckRegistry,
-	})
-	if err != nil {
-		panic(errors.WithMessage(err, "Error initializing ledger provider"))
-	}
+	provider.Initialize(finalStateListeners)
 	ledgerProvider = provider
 	logger.Info("ledger mgmt initialized")
 }
@@ -87,6 +75,7 @@ func initialize(initializer *Initializer) {
 // CreateLedger creates a new ledger with the given genesis block.
 // This function guarantees that the creation of ledger and committing the genesis block would an atomic action
 // The chain id retrieved from the genesis block is treated as a ledger id
+//根据创世区块创建新的区块
 func CreateLedger(genesisBlock *common.Block) (ledger.PeerLedger, error) {
 	lock.Lock()
 	defer lock.Unlock()
@@ -99,11 +88,13 @@ func CreateLedger(genesisBlock *common.Block) (ledger.PeerLedger, error) {
 	}
 
 	logger.Infof("Creating ledger [%s] with genesis block", id)
+	//根据genesisBlock创建账本并保存到ledger_mgmet.go中的openedLedgers映射中，这一步账本被创建
 	l, err := ledgerProvider.Create(genesisBlock)
 	if err != nil {
 		return nil, err
 	}
 	l = wrapLedger(id, l)
+
 	openedLedgers[id] = l
 	logger.Infof("Created ledger [%s] with genesis block", id)
 	return l, nil
@@ -181,45 +172,6 @@ func (l *closableLedger) closeWithoutLock() {
 
 // lscc namespace listener for chaincode instantiate transactions (which manipulates data in 'lscc' namespace)
 // this code should be later moved to peer and passed via `Initialize` function of ledgermgmt
-func addListenerForCCEventsHandler(
-	deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider,
-	stateListeners []ledger.StateListener) []ledger.StateListener {
-	return append(stateListeners, &cceventmgmt.KVLedgerLSCCStateListener{DeployedChaincodeInfoProvider: deployedCCInfoProvider})
-}
-
-// chaincodeInfoProviderImpl implements interface cceventmgmt.ChaincodeInfoProvider
-type chaincodeInfoProviderImpl struct {
-	pr                     *platforms.Registry
-	deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider
-}
-
-// GetDeployedChaincodeInfo implements function in the interface cceventmgmt.ChaincodeInfoProvider
-func (p *chaincodeInfoProviderImpl) GetDeployedChaincodeInfo(chainid string,
-	chaincodeDefinition *cceventmgmt.ChaincodeDefinition) (*ledger.DeployedChaincodeInfo, error) {
-	lock.Lock()
-	ledger := openedLedgers[chainid]
-	lock.Unlock()
-	if ledger == nil {
-		return nil, errors.Errorf("Ledger not opened [%s]", chainid)
-	}
-	qe, err := ledger.NewQueryExecutor()
-	if err != nil {
-		return nil, err
-	}
-	defer qe.Done()
-	deployedChaincodeInfo, err := p.deployedCCInfoProvider.ChaincodeInfo(chaincodeDefinition.Name, qe)
-	if err != nil || deployedChaincodeInfo == nil {
-		return nil, err
-	}
-	if deployedChaincodeInfo.Version != chaincodeDefinition.Version ||
-		!bytes.Equal(deployedChaincodeInfo.Hash, chaincodeDefinition.Hash) {
-		// if the deployed chaincode with the given name has different version or different hash, return nil
-		return nil, nil
-	}
-	return deployedChaincodeInfo, nil
-}
-
-// RetrieveChaincodeArtifacts implements function in the interface cceventmgmt.ChaincodeInfoProvider
-func (p *chaincodeInfoProviderImpl) RetrieveChaincodeArtifacts(chaincodeDefinition *cceventmgmt.ChaincodeDefinition) (installed bool, dbArtifactsTar []byte, err error) {
-	return ccprovider.ExtractStatedbArtifactsForChaincode(chaincodeDefinition.Name, chaincodeDefinition.Version, p.pr)
+func addListenerForCCEventsHandler(stateListeners []ledger.StateListener) []ledger.StateListener {
+	return append(stateListeners, &cceventmgmt.KVLedgerLSCCStateListener{})
 }

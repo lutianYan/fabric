@@ -26,6 +26,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/core/peer"
 	"github.com/hyperledger/fabric/core/policy"
+	"github.com/hyperledger/fabric/events/producer"
 	"github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/protos/common"
 	pb "github.com/hyperledger/fabric/protos/peer"
@@ -48,14 +49,6 @@ func New(ccp ccprovider.ChaincodeProvider, sccp sysccprovider.SystemChaincodePro
 		aclProvider: aclProvider,
 	}
 }
-
-func (e *PeerConfiger) Name() string              { return "cscc" }
-func (e *PeerConfiger) Path() string              { return "github.com/hyperledger/fabric/core/scc/cscc" }
-func (e *PeerConfiger) InitArgs() [][]byte        { return nil }
-func (e *PeerConfiger) Chaincode() shim.Chaincode { return e }
-func (e *PeerConfiger) InvokableExternal() bool   { return true }
-func (e *PeerConfiger) InvokableCC2CC() bool      { return false }
-func (e *PeerConfiger) Enabled() bool             { return true }
 
 // PeerConfiger implements the configuration handler for the peer. For every
 // configuration transaction coming in from the ordering service, the
@@ -160,7 +153,7 @@ func (e *PeerConfiger) InvokeNoShim(args [][]byte, sp *pb.SignedProposal) pb.Res
 			txsFilter = util.NewTxValidationFlagsSetValue(len(block.Data.Data), pb.TxValidationCode_VALID)
 			block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txsFilter
 		}
-
+		//cid :channelId,block:genesis block
 		return joinChain(cid, block, e.ccp, e.sccp)
 	case GetConfigBlock:
 		// 2. check policy
@@ -232,12 +225,22 @@ func validateConfigBlock(block *common.Block) error {
 // joinChain will join the specified chain in the configuration block.
 // Since it is the first block, it is the genesis block containing configuration
 // for this chain, so we want to update the Chain object with this info
+//这个channel的ID在后文实际上就用作账本的ID了
 func joinChain(chainID string, block *common.Block, ccp ccprovider.ChaincodeProvider, sccp sysccprovider.SystemChaincodeProvider) pb.Response {
 	if err := peer.CreateChainFromBlock(block, ccp, sccp); err != nil {
 		return shim.Error(err.Error())
 	}
 
 	peer.InitChain(chainID)
+
+	bevent, _, _, err := producer.CreateBlockEvents(block)
+	if err != nil {
+		cnflogger.Errorf("Error processing block events for block number [%d]: %s", block.Header.Number, err)
+	} else {
+		if err := producer.Send(bevent); err != nil {
+			cnflogger.Errorf("Channel [%s] Error sending block event for block number [%d]: %s", chainID, block.Header.Number, err)
+		}
+	}
 
 	return shim.Success(nil)
 }

@@ -8,12 +8,14 @@ package kvledger
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+
+	"github.com/hyperledger/fabric/core/ledger/confighistory"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 	"github.com/hyperledger/fabric/core/ledger"
-	"github.com/hyperledger/fabric/core/ledger/confighistory"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/bookkeeping"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/history/historydb"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/history/historydb/historyleveldb"
@@ -22,7 +24,6 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/ledgerstorage"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/utils"
-	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb"
 )
 
@@ -32,66 +33,55 @@ var (
 	// ErrNonExistingLedgerID is thrown by a OpenLedger call if a ledger with the given id does not exist
 	ErrNonExistingLedgerID = errors.New("LedgerID does not exist")
 	// ErrLedgerNotOpened is thrown by a CloseLedger call if a ledger with the given id has not been opened
-	ErrLedgerNotOpened = errors.New("ledger is not opened yet")
+	ErrLedgerNotOpened = errors.New("Ledger is not opened yet")
 
 	underConstructionLedgerKey = []byte("underConstructionLedgerKey")
 	ledgerKeyPrefix            = []byte("l")
 )
 
 // Provider implements interface ledger.PeerLedgerProvider
+//实现接口PeerLedgerProvider
 type Provider struct {
-	idStore             *idStore
+	idStore             *idStore //账本ID
 	ledgerStoreProvider *ledgerstorage.Provider
 	vdbProvider         privacyenabledstate.DBProvider
 	historydbProvider   historydb.HistoryDBProvider
 	configHistoryMgr    confighistory.Mgr
 	stateListeners      []ledger.StateListener
 	bookkeepingProvider bookkeeping.Provider
-	initializer         *ledger.Initializer
-	collElgNotifier     *collElgNotifier
-	stats               *stats
 }
 
 // NewProvider instantiates a new Provider.
 // This is not thread-safe and assumed to be synchronized be the caller
 func NewProvider() (ledger.PeerLedgerProvider, error) {
+
 	logger.Info("Initializing ledger provider")
+
 	// Initialize the ID store (inventory of chainIds/ledgerIds)
 	idStore := openIDStore(ledgerconfig.GetLedgerProviderPath())
+
 	ledgerStoreProvider := ledgerstorage.NewProvider()
+
+	// Initialize the versioned database (state database)
+	vdbProvider, err := privacyenabledstate.NewCommonStorageDBProvider()
+	if err != nil {
+		return nil, err
+	}
+
 	// Initialize the history database (index for history of values by key)
 	historydbProvider := historyleveldb.NewHistoryDBProvider()
+	bookkeepingProvider := bookkeeping.NewProvider()
+	// Initialize config history mgr
+	configHistoryMgr := confighistory.NewMgr()
 	logger.Info("ledger provider Initialized")
-	provider := &Provider{idStore, ledgerStoreProvider,
-		nil, historydbProvider, nil, nil, nil, nil, nil, nil}
+	provider := &Provider{idStore, ledgerStoreProvider, vdbProvider, historydbProvider, configHistoryMgr, nil, bookkeepingProvider}
+	provider.recoverUnderConstructionLedger()
 	return provider, nil
 }
 
 // Initialize implements the corresponding method from interface ledger.PeerLedgerProvider
-func (provider *Provider) Initialize(initializer *ledger.Initializer) error {
-	var err error
-	configHistoryMgr := confighistory.NewMgr(initializer.DeployedChaincodeInfoProvider)
-	collElgNotifier := &collElgNotifier{
-		initializer.DeployedChaincodeInfoProvider,
-		initializer.MembershipInfoProvider,
-		make(map[string]collElgListener),
-	}
-	stateListeners := initializer.StateListeners
-	stateListeners = append(stateListeners, collElgNotifier)
-	stateListeners = append(stateListeners, configHistoryMgr)
-
-	provider.initializer = initializer
-	provider.configHistoryMgr = configHistoryMgr
+func (provider *Provider) Initialize(stateListeners []ledger.StateListener) {
 	provider.stateListeners = stateListeners
-	provider.collElgNotifier = collElgNotifier
-	provider.bookkeepingProvider = bookkeeping.NewProvider()
-	provider.vdbProvider, err = privacyenabledstate.NewCommonStorageDBProvider(provider.bookkeepingProvider, initializer.MetricsProvider, initializer.HealthCheckRegistry)
-	if err != nil {
-		return err
-	}
-	provider.stats = newStats(initializer.MetricsProvider)
-	provider.recoverUnderConstructionLedger()
-	return nil
 }
 
 // Create implements the corresponding method from interface ledger.PeerLedgerProvider
@@ -99,11 +89,16 @@ func (provider *Provider) Initialize(initializer *ledger.Initializer) error {
 // upon a successful ledger creation with the committed genesis block, removes the flag and add entry into
 // created ledgers list (atomically). If a crash happens in between, the 'recoverUnderConstructionLedger'
 // function is invoked before declaring the provider to be usable
+//创建账本
+//创建包含打开接口，是在账本不存在的时候进行的操作，创建的时候会将genesisblock直接写入账本
+//创建PeerLedger时，会将账本的id和创世块内容组成键值对保存在数据库中
 func (provider *Provider) Create(genesisBlock *common.Block) (ledger.PeerLedger, error) {
+	//获取ledgerid
 	ledgerID, err := utils.GetChainIDFromBlock(genesisBlock)
 	if err != nil {
 		return nil, err
 	}
+	//检查账本是否存在
 	exists, err := provider.idStore.ledgerIDExists(ledgerID)
 	if err != nil {
 		return nil, err
@@ -111,27 +106,32 @@ func (provider *Provider) Create(genesisBlock *common.Block) (ledger.PeerLedger,
 	if exists {
 		return nil, ErrLedgerIDExists
 	}
+	//如果不存在，则向idStore中添加在建标识，对当前创建的账本进行标记
 	if err = provider.idStore.setUnderConstructionFlag(ledgerID); err != nil {
 		return nil, err
 	}
 	lgr, err := provider.openInternal(ledgerID)
 	if err != nil {
-		logger.Errorf("Error opening a new empty ledger. Unsetting under construction flag. Error: %+v", err)
-		panicOnErr(provider.runCleanup(ledgerID), "Error running cleanup for ledger id [%s]", ledgerID)
+		logger.Errorf("Error in opening a new empty ledger. Unsetting under construction flag. Err: %s", err)
+		panicOnErr(provider.runCleanup(ledgerID), "Error while running cleanup for ledger id [%s]", ledgerID)
 		panicOnErr(provider.idStore.unsetUnderConstructionFlag(), "Error while unsetting under construction flag")
 		return nil, err
 	}
+	//向账本中存储genesisBlock
 	if err := lgr.CommitWithPvtData(&ledger.BlockAndPvtData{
 		Block: genesisBlock,
 	}); err != nil {
 		lgr.Close()
 		return nil, err
 	}
+	//以 ledgerKeyPrefix+账本ID 为key，以gensisblock为value，组成键值对进行存储
 	panicOnErr(provider.idStore.createLedgerID(ledgerID, genesisBlock), "Error while marking ledger as created")
 	return lgr, nil
 }
 
 // Open implements the corresponding method from interface ledger.PeerLedgerProvider
+//打开账本
+//打开账本是在账本已经存在时进行的操作，一个账本存在的标准：idStore中存在有该账本的ID，且该账本的在建表示不存在
 func (provider *Provider) Open(ledgerID string) (ledger.PeerLedger, error) {
 	logger.Debugf("Open() opening kvledger: %s", ledgerID)
 	// Check the ID store to ensure that the chainId/ledgerId exists
@@ -147,19 +147,21 @@ func (provider *Provider) Open(ledgerID string) (ledger.PeerLedger, error) {
 
 func (provider *Provider) openInternal(ledgerID string) (ledger.PeerLedger, error) {
 	// Get the block store for a chain/ledger
+	//区块
 	blockStore, err := provider.ledgerStoreProvider.Open(ledgerID)
 	if err != nil {
 		return nil, err
 	}
-	provider.collElgNotifier.registerListener(ledgerID, blockStore)
 
 	// Get the versioned database (state database) for a chain/ledger
+	//stateDB
 	vDB, err := provider.vdbProvider.GetDBHandle(ledgerID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get the history database (index for history of values by key) for a chain/ledger
+	//historyDB
 	historyDB, err := provider.historydbProvider.GetDBHandle(ledgerID)
 	if err != nil {
 		return nil, err
@@ -167,12 +169,8 @@ func (provider *Provider) openInternal(ledgerID string) (ledger.PeerLedger, erro
 
 	// Create a kvLedger for this chain/ledger, which encasulates the underlying data stores
 	// (id store, blockstore, state database, history database)
-	l, err := newKVLedger(
-		ledgerID, blockStore, vDB, historyDB, provider.configHistoryMgr,
-		provider.stateListeners, provider.bookkeepingProvider,
-		provider.initializer.DeployedChaincodeInfoProvider,
-		provider.stats.ledgerStats(ledgerID),
-	)
+	//创建kvLedger
+	l, err := newKVLedger(ledgerID, blockStore, vDB, historyDB, provider.configHistoryMgr, provider.stateListeners, provider.bookkeepingProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -212,25 +210,31 @@ func (provider *Provider) recoverUnderConstructionLedger() {
 		return
 	}
 	logger.Infof("ledger [%s] found as under construction", ledgerID)
+	//再次创建
 	ledger, err := provider.openInternal(ledgerID)
 	panicOnErr(err, "Error while opening under construction ledger [%s]", ledgerID)
+	//从blockstore中读取block账本信息（包括当前账本高度，当前账本最新存储的block的hash和上一块block的hash）
 	bcInfo, err := ledger.GetBlockchainInfo()
 	panicOnErr(err, "Error while getting blockchain info for the under construction ledger [%s]", ledgerID)
 	ledger.Close()
 
 	switch bcInfo.Height {
+	//说明genesisblock未完整写入，清理后删除在建标识
+	//说明block序列号是从0开始的，在未写入genesisblock的情况下账本算是未建立
 	case 0:
 		logger.Infof("Genesis block was not committed. Hence, the peer ledger not created. unsetting the under construction flag")
 		panicOnErr(provider.runCleanup(ledgerID), "Error while running cleanup for ledger id [%s]", ledgerID)
 		panicOnErr(provider.idStore.unsetUnderConstructionFlag(), "Error while unsetting under construction flag")
+		//说明genesisblock已经写入
+		//获取genesisblock块，并据此在idStore中添加这个账本
 	case 1:
 		logger.Infof("Genesis block was committed. Hence, marking the peer ledger as created")
 		genesisBlock, err := ledger.GetBlockByNumber(0)
 		panicOnErr(err, "Error while retrieving genesis block from blockchain for ledger [%s]", ledgerID)
 		panicOnErr(provider.idStore.createLedgerID(ledgerID, genesisBlock), "Error while adding ledgerID [%s] to created list", ledgerID)
 	default:
-		panic(errors.Errorf(
-			"data inconsistency: under construction flag is set for ledger [%s] while the height of the blockchain is [%d]",
+		panic(fmt.Errorf(
+			"Data inconsistency: under construction flag is set for ledger [%s] while the height of the blockchain is [%d]",
 			ledgerID, bcInfo.Height))
 	}
 	return
@@ -252,12 +256,13 @@ func panicOnErr(err error, mgsFormat string, args ...interface{}) {
 		return
 	}
 	args = append(args, err)
-	panic(fmt.Sprintf(mgsFormat+" Error: %s", args...))
+	panic(fmt.Sprintf(mgsFormat+" Err:%s ", args...))
 }
 
 //////////////////////////////////////////////////////////////////////
 // Ledger id persistence related code
 ///////////////////////////////////////////////////////////////////////
+//直接使用leveldb 其主要功能有：存储创建的账本的ID，使用一个在建标识来标记账本是否正确建立，类似于一个检查点
 type idStore struct {
 	db *leveldbhelper.DB
 }
@@ -269,6 +274,7 @@ func openIDStore(path string) *idStore {
 }
 
 func (s *idStore) setUnderConstructionFlag(ledgerID string) error {
+	//这个key用来记录账本创建过程中是否发生了异常，发生异常时会有补偿机制重建账本
 	return s.db.Put(underConstructionLedgerKey, []byte(ledgerID), true)
 }
 
@@ -285,21 +291,26 @@ func (s *idStore) getUnderConstructionFlag() (string, error) {
 }
 
 func (s *idStore) createLedgerID(ledgerID string, gb *common.Block) error {
+	//ledgerKeyPrefix+ledgerID
+	//以 ledgerKeyPrefix+账本ID 为key，以gensisblock为value，组成键值对进行存储
 	key := s.encodeLedgerKey(ledgerID)
 	var val []byte
 	var err error
+	if val, err = proto.Marshal(gb); err != nil {
+		return err
+	}
 	if val, err = s.db.Get(key); err != nil {
 		return err
 	}
 	if val != nil {
 		return ErrLedgerIDExists
 	}
-	if val, err = proto.Marshal(gb); err != nil {
-		return err
-	}
 	batch := &leveldb.Batch{}
+	//向idStore中存储该账本id
 	batch.Put(key, val)
+	//删除在建标识
 	batch.Delete(underConstructionLedgerKey)
+	//同步批量写入这两点改变，如此这个账本才算完整建立
 	return s.db.WriteBatch(batch, true)
 }
 
@@ -322,6 +333,7 @@ func (s *idStore) getAllLedgerIds() ([]string, error) {
 		if bytes.Equal(itr.Key(), underConstructionLedgerKey) {
 			continue
 		}
+		//如果是账本id的前缀，则说明有这个账本，存放在返回的list中。
 		id := string(s.decodeLedgerID(itr.Key()))
 		ids = append(ids, id)
 		itr.Next()

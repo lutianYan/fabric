@@ -17,11 +17,7 @@ import (
 
 //MockInitialize resets chains for test env
 func MockInitialize() {
-	ledgermgmt.InitializeTestEnvWithInitializer(
-		&ledgermgmt.Initializer{
-			CustomTxProcessors: ConfigTxProcessors,
-		},
-	)
+	ledgermgmt.InitializeTestEnvWithCustomProcessors(ConfigTxProcessors)
 	chains.list = make(map[string]*chain)
 	chainInitializer = func(string) { return }
 }

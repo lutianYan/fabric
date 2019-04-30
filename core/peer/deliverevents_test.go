@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package peer
 
 import (
-	"context"
 	"io"
 	"sync"
 	"testing"
@@ -15,7 +14,6 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/deliver"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
-	"github.com/hyperledger/fabric/common/metrics/disabled"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/protos/common"
@@ -25,6 +23,7 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"golang.org/x/net/context"
 	"google.golang.org/grpc/metadata"
 	peer2 "google.golang.org/grpc/peer"
 )
@@ -99,9 +98,9 @@ type mockChainManager struct {
 	mock.Mock
 }
 
-func (m *mockChainManager) GetChain(chainID string) deliver.Chain {
+func (m *mockChainManager) GetChain(chainID string) (deliver.Chain, bool) {
 	args := m.Called(chainID)
-	return args.Get(0).(deliver.Chain)
+	return args.Get(0).(deliver.Chain), args.Get(1).(bool)
 }
 
 // mockDeliverServer mock implementation of the Deliver_DeliverServer
@@ -158,13 +157,6 @@ type testConfig struct {
 type testCase struct {
 	name    string
 	prepare func(wg *sync.WaitGroup) (deliver.ChainManager, peer.Deliver_DeliverServer)
-}
-
-func TestFilteredBlockResponseSenderIsFiltered(t *testing.T) {
-	var fbrs interface{} = &filteredBlockResponseSender{}
-	filtered, ok := fbrs.(deliver.Filtered)
-	assert.True(t, ok, "should be filtered")
-	assert.True(t, filtered.IsFiltered(), "should return true from IsFiltered")
 }
 
 func TestEventsServer_DeliverFiltered(t *testing.T) {
@@ -379,12 +371,7 @@ func TestEventsServer_DeliverFiltered(t *testing.T) {
 			wg := &sync.WaitGroup{}
 			chainManager, deliverServer := test.prepare(wg)
 
-			server := NewDeliverEventsServer(
-				false,
-				defaultPolicyCheckerProvider,
-				chainManager,
-				&disabled.Provider{},
-			)
+			server := NewDeliverEventsServer(false, defaultPolicyCheckerProvider, chainManager)
 			err := server.DeliverFiltered(deliverServer)
 			wg.Wait()
 			// no error expected

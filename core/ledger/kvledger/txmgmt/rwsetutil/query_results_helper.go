@@ -1,7 +1,17 @@
 /*
-Copyright IBM Corp. All Rights Reserved.
+Copyright IBM Corp. 2016 All Rights Reserved.
 
-SPDX-License-Identifier: Apache-2.0
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+		 http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 
 package rwsetutil
@@ -13,7 +23,6 @@ import (
 	"github.com/hyperledger/fabric/bccsp"
 	bccspfactory "github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/protos/ledger/rwset/kvrwset"
-	"github.com/pkg/errors"
 )
 
 // MerkleTreeLevel used for representing a level of the merkle tree
@@ -50,9 +59,11 @@ var (
 //
 // `AddResult` function should be invoke to supply the next result and at the end `Done` function should be invoked.
 // The `Done` function does the final processing and returns the final output
+//resultsItr迭代器管的一个工具
 type RangeQueryResultsHelper struct {
-	pendingResults []*kvrwset.KVRead
-	mt             *merkleTree
+	pendingResults []*kvrwset.KVRead //用于暂时存储RangeQueryInfo范围内的读值
+	mt             *merkleTree       //用于存储一颗merkle树，该树存储与该pendingresults对应的hash值，两者是同步增长的（hash的同步与否是由hashingEnabled决定的）
+	//每次resultsItr迭代器被调用一次Next()，读取的值都会被添加到RangeQueryResultsHelper的pendingResults和mt中
 	maxDegree      uint32
 	hashingEnabled bool
 }
@@ -141,14 +152,17 @@ func serializeKVReads(kvReads []*kvrwset.KVRead) ([]byte, error) {
 //////////// Merkle tree building code  ///////
 
 type merkleTree struct {
+	//格式的映射实现了该树，树的每个节点保存的是hash值
+	//MerkleTreeLevel是uint32
 	tree      map[MerkleTreeLevel][]Hash
-	maxLevel  MerkleTreeLevel
+	maxLevel  MerkleTreeLevel//树的级层，默认为1,当树的level1有maxDegree+1个节点的时候，会进行归并
 	maxDegree uint32
 }
 
+//默认层数为1
 func newMerkleTree(maxDegree uint32) (*merkleTree, error) {
 	if maxDegree < 2 {
-		return nil, errors.Errorf("maxDegree [%d] should not be less than 2 in the merkle tree", maxDegree)
+		return nil, fmt.Errorf("maxDegree [is %d] should not be less than 2 in the merkle tree", maxDegree)
 	}
 	return &merkleTree{make(map[MerkleTreeLevel][]Hash), 1, maxDegree}, nil
 }
@@ -156,6 +170,7 @@ func newMerkleTree(maxDegree uint32) (*merkleTree, error) {
 // update takes a hash that forms the next leaf level (level-1) node in the merkle tree.
 // Also, complete the merkle tree as much as possible with the addition of this new leaf node -
 // i.e. recursively build the higher level nodes and delete the underlying sub-tree.
+//merkle树的更新
 func (m *merkleTree) update(nextLeafLevelHash Hash) error {
 	logger.Debugf("Before update() = %s", m)
 	defer logger.Debugf("After update() = %s", m)
@@ -164,12 +179,14 @@ func (m *merkleTree) update(nextLeafLevelHash Hash) error {
 	for {
 		currentLevelHashes := m.tree[currentLevel]
 		if uint32(len(currentLevelHashes)) <= m.maxDegree {
-			return nil
+				return nil
 		}
+		//归集hash值
 		nextLevelHash, err := computeCombinedHash(currentLevelHashes)
 		if err != nil {
 			return err
 		}
+		//删除当前层的值
 		delete(m.tree, currentLevel)
 		nextLevel := currentLevel + 1
 		m.tree[nextLevel] = append(m.tree[nextLevel], nextLevelHash)
@@ -183,6 +200,7 @@ func (m *merkleTree) update(nextLeafLevelHash Hash) error {
 // done completes the merkle tree.
 // There may have been some nodes that are at the levels lower than the maxLevel (maximum level seen by the tree so far).
 // Make the parent nodes out of such nodes till we complete the tree at the level of maxLevel (or maxLevel+1).
+//将存储的pendingResults和merkleTree一同返回，两者实际上只会返回其中一个，其中一个必为nil
 func (m *merkleTree) done() error {
 	logger.Debugf("Before done() = %s", m)
 	defer logger.Debugf("After done() = %s", m)

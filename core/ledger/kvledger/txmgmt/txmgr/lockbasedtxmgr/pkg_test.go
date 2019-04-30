@@ -17,7 +17,6 @@ limitations under the License.
 package lockbasedtxmgr
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/golang/protobuf/proto"
@@ -27,13 +26,10 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/privacyenabledstate"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/txmgr"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/version"
-	"github.com/hyperledger/fabric/core/ledger/mock"
 	"github.com/hyperledger/fabric/core/ledger/pvtdatapolicy"
 	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/protos/common"
-	"github.com/hyperledger/fabric/protos/ledger/queryresult"
 	"github.com/hyperledger/fabric/protos/ledger/rwset"
-	"github.com/stretchr/testify/assert"
 )
 
 type testEnv interface {
@@ -85,14 +81,10 @@ func (env *lockBasedEnv) init(t *testing.T, testLedgerID string, btlPolicy pvtda
 	env.t = t
 	env.testDBEnv.Init(t)
 	env.testDB = env.testDBEnv.GetDBHandle(testLedgerID)
-	assert.NoError(t, err)
+	testutil.AssertNoError(t, err, "")
 	env.testBookkeepingEnv = bookkeeping.NewTestEnv(t)
-	env.txmgr, err = NewLockBasedTxMgr(
-		testLedgerID, env.testDB, nil,
-		btlPolicy, env.testBookkeepingEnv.TestProvider,
-		&mock.DeployedChaincodeInfoProvider{})
-	assert.NoError(t, err)
-
+	env.txmgr, err = NewLockBasedTxMgr(testLedgerID, env.testDB, nil, btlPolicy, env.testBookkeepingEnv.TestProvider)
+	testutil.AssertNoError(t, err, "")
 }
 
 func (env *lockBasedEnv) getTxMgr() txmgr.TxMgr {
@@ -125,8 +117,8 @@ func newTxMgrTestHelper(t *testing.T, txMgr txmgr.TxMgr) *txMgrTestHelper {
 func (h *txMgrTestHelper) validateAndCommitRWSet(txRWSet *rwset.TxReadWriteSet) {
 	rwSetBytes, _ := proto.Marshal(txRWSet)
 	block := h.bg.NextBlock([][]byte{rwSetBytes})
-	_, err := h.txMgr.ValidateAndPrepare(&ledger.BlockAndPvtData{Block: block, PvtData: nil}, true)
-	assert.NoError(h.t, err)
+	err := h.txMgr.ValidateAndPrepare(&ledger.BlockAndPvtData{Block: block, BlockPvtData: nil}, true)
+	testutil.AssertNoError(h.t, err, "")
 	txsFltr := util.TxValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	invalidTxNum := 0
 	for i := 0; i < len(block.Data.Data); i++ {
@@ -134,16 +126,16 @@ func (h *txMgrTestHelper) validateAndCommitRWSet(txRWSet *rwset.TxReadWriteSet) 
 			invalidTxNum++
 		}
 	}
-	assert.Equal(h.t, 0, invalidTxNum)
+	testutil.AssertEquals(h.t, invalidTxNum, 0)
 	err = h.txMgr.Commit()
-	assert.NoError(h.t, err)
+	testutil.AssertNoError(h.t, err, "")
 }
 
 func (h *txMgrTestHelper) checkRWsetInvalid(txRWSet *rwset.TxReadWriteSet) {
 	rwSetBytes, _ := proto.Marshal(txRWSet)
 	block := h.bg.NextBlock([][]byte{rwSetBytes})
-	_, err := h.txMgr.ValidateAndPrepare(&ledger.BlockAndPvtData{Block: block, PvtData: nil}, true)
-	assert.NoError(h.t, err)
+	err := h.txMgr.ValidateAndPrepare(&ledger.BlockAndPvtData{Block: block, BlockPvtData: nil}, true)
+	testutil.AssertNoError(h.t, err, "")
 	txsFltr := util.TxValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	invalidTxNum := 0
 	for i := 0; i < len(block.Data.Data); i++ {
@@ -151,7 +143,7 @@ func (h *txMgrTestHelper) checkRWsetInvalid(txRWSet *rwset.TxReadWriteSet) {
 			invalidTxNum++
 		}
 	}
-	assert.Equal(h.t, 1, invalidTxNum)
+	testutil.AssertEquals(h.t, invalidTxNum, 1)
 }
 
 func populateCollConfigForTest(t *testing.T, txMgr *LockBasedTxMgr, nsColls []collConfigkey, ht *version.Height) {
@@ -170,18 +162,12 @@ func populateCollConfigForTest(t *testing.T, txMgr *LockBasedTxMgr, nsColls []co
 		}
 		pkg.Config = append(pkg.Config, &common.CollectionConfig{Payload: sCollConfig})
 	}
-	ccInfoProvider := &mock.DeployedChaincodeInfoProvider{}
-	ccInfoProvider.ChaincodeInfoStub = func(ccName string, qe ledger.SimpleQueryExecutor) (*ledger.DeployedChaincodeInfo, error) {
-		fmt.Printf("retrieveing info for [%s] from [%s]\n", ccName, m)
-		return &ledger.DeployedChaincodeInfo{Name: ccName, CollectionConfigPkg: m[ccName]}, nil
-	}
-	txMgr.ccInfoProvider = ccInfoProvider
-}
-
-func testutilPopulateDB(t *testing.T, txMgr *LockBasedTxMgr, ns string, data []*queryresult.KV, version *version.Height) {
 	updates := privacyenabledstate.NewUpdateBatch()
-	for _, kv := range data {
-		updates.PubUpdates.Put(ns, kv.Key, kv.Value, version)
+
+	for ns, pkg := range m {
+		pkgBytes, err := proto.Marshal(pkg)
+		testutil.AssertNoError(t, err, "")
+		updates.PubUpdates.Put(lsccNamespace, constructCollectionConfigKey(ns), pkgBytes, ht)
 	}
-	txMgr.db.ApplyPrivacyAwareUpdates(updates, version)
+	txMgr.db.ApplyPrivacyAwareUpdates(updates, ht)
 }

@@ -25,8 +25,13 @@ import (
 	"github.com/hyperledger/fabric/protos/ledger/rwset/kvrwset"
 )
 
+//范围查询验证器
 type rangeQueryValidator interface {
+	//init接口用于初始化
 	init(rqInfo *kvrwset.RangeQueryInfo, itr statedb.ResultsIterator) error
+	//验证
+	//实现为两个版本，一个是用来验证原始范围读值的rangeQueryResultsValidator，一个是用来验证范围读值的归并哈希值的rangeQueryHashValidator，
+	//多数情况下范围读值中存储的是读值集合的归并hash值
 	validate() (bool, error)
 }
 

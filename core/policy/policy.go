@@ -17,8 +17,9 @@ limitations under the License.
 package policy
 
 import (
-	"errors"
 	"fmt"
+
+	"errors"
 
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/msp"
@@ -47,16 +48,18 @@ type PolicyChecker interface {
 }
 
 type policyChecker struct {
-	channelPolicyManagerGetter policies.ChannelPolicyManagerGetter
-	localMSP                   msp.IdentityDeserializer
-	principalGetter            mgmt.MSPPrincipalGetter
+	channelPolicyManagerGetter policies.ChannelPolicyManagerGetter//通道策略管理
+	localMSP                   msp.IdentityDeserializer//身份
+	principalGetter            mgmt.MSPPrincipalGetter//委托人
 }
 
+//构造policychecker
 // NewPolicyChecker creates a new instance of PolicyChecker
 func NewPolicyChecker(channelPolicyManagerGetter policies.ChannelPolicyManagerGetter, localMSP msp.IdentityDeserializer, principalGetter mgmt.MSPPrincipalGetter) PolicyChecker {
 	return &policyChecker{channelPolicyManagerGetter, localMSP, principalGetter}
 }
 
+//检查签提案是否符合通道策略
 // CheckPolicy checks that the passed signed proposal is valid with the respect to
 // passed policy on the passed channel.
 func (p *policyChecker) CheckPolicy(channelID, policyName string, signedProp *pb.SignedProposal) error {
@@ -151,6 +154,7 @@ func (p *policyChecker) CheckPolicyNoChannel(policyName string, signedProp *pb.S
 	return id.Verify(signedProp.ProposalBytes, signedProp.Signature)
 }
 
+//检查签名数据是否符合通道策略，获取策略并调取policy.Evaluate(sd)
 // CheckPolicyBySignedData checks that the passed signed data is valid with the respect to
 // passed policy on the passed channel.
 func (p *policyChecker) CheckPolicyBySignedData(channelID, policyName string, sd []*common.SignedData) error {
@@ -184,12 +188,13 @@ func (p *policyChecker) CheckPolicyBySignedData(channelID, policyName string, sd
 	return nil
 }
 
+//全局变量定义和赋值函数
 var pcFactory PolicyCheckerFactory
-
+GetPolicyChecker
 // PolicyCheckerFactory defines a factory interface so
 // that the actual implementation can be injected
 type PolicyCheckerFactory interface {
-	NewPolicyChecker() PolicyChecker
+	NewPolicyChecker() PolicyChecker//构造PoliceChecker实例
 }
 
 // RegisterPolicyCheckerFactory is to be called once to set
@@ -197,6 +202,7 @@ type PolicyCheckerFactory interface {
 func RegisterPolicyCheckerFactory(f PolicyCheckerFactory) {
 	pcFactory = f
 }
+
 
 // GetPolicyChecker returns instances of PolicyChecker;
 // the actual implementation is controlled by the factory that

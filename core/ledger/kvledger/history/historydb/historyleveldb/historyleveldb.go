@@ -71,6 +71,10 @@ func (historyDB *historyDB) Close() {
 }
 
 // Commit implements method in HistoryDB interface
+//当向HistoryDB提交一个block时，会筛选出block中的有效交易，并把这些交易的写集中的每个写值读取出来，
+// 以命名空间ns + compositeKeySep + 写值key + compositeKeySep + block序列号 + 交易ID的组合形式形成一个组合键compositeHistoryKey，
+// 然后dbBatch.Put(compositeHistoryKey, emptyValue)，将compositeHistoryKey与空值emptyValue作为一个键值对写入批量升级包dbBatch中
+
 func (historyDB *historyDB) Commit(block *common.Block) error {
 
 	blockNo := block.Header.Number
@@ -151,10 +155,12 @@ func (historyDB *historyDB) Commit(block *common.Block) error {
 
 	// add savepoint for recovery purpose
 	height := version.NewHeight(blockNo, tranNo)
+	//当block中所有有效交易均遍历完毕后，以保存点封底
 	dbBatch.Put(savePointKey, height.ToBytes())
 
 	// write the block's history records and savepoint to LevelDB
 	// Setting snyc to true as a precaution, false may be an ok optimization after further testing.
+	//向HistoryDB提交数据
 	if err := historyDB.db.WriteBatch(dbBatch, true); err != nil {
 		return err
 	}
@@ -196,14 +202,6 @@ func (historyDB *historyDB) ShouldRecover(lastAvailableBlock uint64) (bool, uint
 // CommitLostBlock implements method in interface kvledger.Recoverer
 func (historyDB *historyDB) CommitLostBlock(blockAndPvtdata *ledger.BlockAndPvtData) error {
 	block := blockAndPvtdata.Block
-
-	// log every 1000th block at Info level so that history rebuild progress can be tracked in production envs.
-	if block.Header.Number%1000 == 0 {
-		logger.Infof("Recommitting block [%d] to history database", block.Header.Number)
-	} else {
-		logger.Debugf("Recommitting block [%d] to history database", block.Header.Number)
-	}
-
 	if err := historyDB.Commit(block); err != nil {
 		return err
 	}

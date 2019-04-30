@@ -20,7 +20,6 @@ const (
 	Lscc_GetChaincodeData          = "lscc/GetChaincodeData"
 	Lscc_GetInstantiatedChaincodes = "lscc/GetInstantiatedChaincodes"
 	Lscc_GetInstalledChaincodes    = "lscc/GetInstalledChaincodes"
-	Lscc_GetCollectionsConfig      = "lscc/GetCollectionsConfig"
 
 	//Qscc resources
 	Qscc_GetChainInfo       = "qscc/GetChainInfo"
@@ -43,9 +42,4 @@ const (
 	//Events
 	Event_Block         = "event/Block"
 	Event_FilteredBlock = "event/FilteredBlock"
-
-	//Token resources
-	Token_Issue    = "token/Issue"
-	Token_Transfer = "token/Transfer"
-	Token_List     = "token/List"
 )

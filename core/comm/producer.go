@@ -62,17 +62,21 @@ func (cp *connProducer) NewConnection() (*grpc.ClientConn, string, error) {
 	cp.Lock()
 	defer cp.Unlock()
 
+	//先从prod对象的Orderer服务节点禁用列表disabledEndpoints中剔除所有禁用时间超过10s的节点，恢复其作为备选的可用Orderer服务节点
 	for endpoint, timeout := range cp.disabledEndpoints {
 		if time.Since(timeout) >= EndpointDisableInterval {
 			delete(cp.disabledEndpoints, endpoint)
 		}
 	}
 
+	//对当前endpoints列表中的节点进行随机混洗
 	endpoints := shuffle(cp.endpoints)
 	checkedEndpoints := make([]string, 0)
+	//遍历endpoints列表检查每一个节点的可用性，获取第一个可用的Orderer服务节点，并且不属于disabledEndpoints列表
 	for _, endpoint := range endpoints {
 		if _, ok := cp.disabledEndpoints[endpoint]; !ok {
 			checkedEndpoints = append(checkedEndpoints, endpoint)
+			//建立与指定Orderer服务节点的grpc链接对象conn
 			conn, err := cp.connect(endpoint)
 			if err != nil {
 				logger.Error("Failed connecting to", endpoint, ", error:", err)

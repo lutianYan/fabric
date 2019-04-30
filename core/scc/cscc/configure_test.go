@@ -8,7 +8,6 @@ package cscc
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"testing"
 	"time"
@@ -20,7 +19,6 @@ import (
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/common/genesis"
 	"github.com/hyperledger/fabric/common/localmsp"
-	"github.com/hyperledger/fabric/common/metrics/disabled"
 	"github.com/hyperledger/fabric/common/mocks/scc"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/common/tools/configtxgen/configtxgentest"
@@ -31,8 +29,6 @@ import (
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
 	"github.com/hyperledger/fabric/core/chaincode"
 	"github.com/hyperledger/fabric/core/chaincode/accesscontrol"
-	"github.com/hyperledger/fabric/core/chaincode/platforms"
-	"github.com/hyperledger/fabric/core/chaincode/platforms/golang"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/container"
@@ -57,8 +53,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 )
 
 //go:generate counterfeiter -o mock/config_manager.go --fake-name ConfigManager . configManager
@@ -215,7 +209,7 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 	e := New(ccp, mp, mockAclProvider)
 	stub := shim.NewMockStub("PeerConfiger", e)
 
-	peerEndpoint := "127.0.0.1:13611"
+	peerEndpoint := "localhost:13611"
 
 	ca, _ := tlsgen.NewCA()
 	certGenerator := accesscontrol.NewAuthenticator(ca)
@@ -228,7 +222,6 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 		ca.CertBytes(),
 		certGenerator,
 		&ccprovider.CCInfoFSImpl{},
-		nil,
 		mockAclProvider,
 		container.NewVMController(
 			map[string]container.VMProvider{
@@ -236,9 +229,6 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 			},
 		),
 		mp,
-		platforms.NewRegistry(&golang.Platform{}),
-		peer.DefaultSupport,
-		&disabled.Provider{},
 	)
 
 	// Init the policy checker
@@ -266,24 +256,11 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 		&policymocks.MockMSPPrincipalGetter{Principal: []byte("Alice")},
 	)
 
-	grpcServer := grpc.NewServer()
-	socket, err := net.Listen("tcp", peerEndpoint)
-	require.NoError(t, err)
-
 	identity, _ := mgmt.GetLocalSigningIdentityOrPanic().Serialize()
 	messageCryptoService := peergossip.NewMCS(&mocks.ChannelPolicyManagerGetter{}, localmsp.NewSigner(), mgmt.NewDeserializersManager())
 	secAdv := peergossip.NewSecurityAdvisor(mgmt.NewDeserializersManager())
-	var defaultSecureDialOpts = func() []grpc.DialOption {
-		var dialOpts []grpc.DialOption
-		dialOpts = append(dialOpts, grpc.WithInsecure())
-		return dialOpts
-	}
-	err = service.InitGossipServiceCustomDeliveryFactory(identity, &disabled.Provider{}, peerEndpoint, grpcServer, nil,
-		&mockDeliveryClientFactory{}, messageCryptoService, secAdv, defaultSecureDialOpts)
+	err := service.InitGossipServiceCustomDeliveryFactory(identity, peerEndpoint, nil, nil, &mockDeliveryClientFactory{}, messageCryptoService, secAdv, nil)
 	assert.NoError(t, err)
-
-	go grpcServer.Serve(socket)
-	defer grpcServer.Stop()
 
 	// Successful path for JoinChain
 	blockBytes := mockConfigBlock()
@@ -524,7 +501,8 @@ func TestPeerConfiger_SubmittingOrdererGenesis(t *testing.T) {
 	conf.Application = nil
 	cg, err := encoder.NewChannelGroup(conf)
 	assert.NoError(t, err)
-	block := genesis.NewFactoryImpl(cg).Block("mytestchainid")
+	block, err := genesis.NewFactoryImpl(cg).Block("mytestchainid")
+	assert.NoError(t, err)
 	blockBytes := utils.MarshalOrPanic(block)
 
 	// Failed path: wrong parameter type

@@ -35,8 +35,6 @@ type DB interface {
 	GetKeyHashVersion(namespace, collection string, keyHash []byte) (*version.Height, error)
 	GetPrivateDataMultipleKeys(namespace, collection string, keys []string) ([]*statedb.VersionedValue, error)
 	GetPrivateDataRangeScanIterator(namespace, collection, startKey, endKey string) (statedb.ResultsIterator, error)
-	GetStateMetadata(namespace, key string) ([]byte, error)
-	GetPrivateDataMetadataByHash(namespace, collection string, keyHash []byte) ([]byte, error)
 	ExecuteQueryOnPrivateData(namespace, collection, query string) (statedb.ResultsIterator, error)
 	ApplyPrivacyAwareUpdates(updates *UpdateBatch, height *version.Height) error
 }
@@ -53,14 +51,6 @@ type HashedCompositeKey struct {
 	Namespace      string
 	CollectionName string
 	KeyHash        string
-}
-
-// PvtKVWrite encloses Key, IsDelete, Value, and Version components
-type PvtKVWrite struct {
-	Key      string
-	IsDelete bool
-	Value    []byte
-	Version  *version.Height
 }
 
 // UpdateBatch encapsulates the updates to Public, Private, and Hashed data.
@@ -121,12 +111,7 @@ func (b UpdateMap) IsEmpty() bool {
 
 // Put sets the value in the batch for a given combination of namespace and collection name
 func (b UpdateMap) Put(ns, coll, key string, value []byte, version *version.Height) {
-	b.PutValAndMetadata(ns, coll, key, value, nil, version)
-}
-
-// PutValAndMetadata adds a key with value and metadata
-func (b UpdateMap) PutValAndMetadata(ns, coll, key string, value []byte, metadata []byte, version *version.Height) {
-	b.getOrCreateNsBatch(ns).PutValAndMetadata(coll, key, value, metadata, version)
+	b.getOrCreateNsBatch(ns).Put(coll, key, value, version)
 }
 
 // Delete adds a delete marker in the batch for a given combination of namespace and collection name
@@ -172,13 +157,7 @@ func (h HashedUpdateBatch) Contains(ns, coll string, keyHash []byte) bool {
 
 // Put overrides the function in UpdateMap for allowing the key to be a []byte instead of a string
 func (h HashedUpdateBatch) Put(ns, coll string, key []byte, value []byte, version *version.Height) {
-	h.PutValHashAndMetadata(ns, coll, key, value, nil, version)
-}
-
-// PutValHashAndMetadata adds a key with value and metadata
-// TODO introducing a new function to limit the refactoring. Later in a separate CR, the 'Put' function above should be removed
-func (h HashedUpdateBatch) PutValHashAndMetadata(ns, coll string, key []byte, value []byte, metadata []byte, version *version.Height) {
-	h.UpdateMap.PutValAndMetadata(ns, coll, string(key), value, metadata, version)
+	h.UpdateMap.Put(ns, coll, string(key), value, version)
 }
 
 // Delete overrides the function in UpdateMap for allowing the key to be a []byte instead of a string
@@ -199,12 +178,9 @@ func (h HashedUpdateBatch) ToCompositeKeyMap() map[HashedCompositeKey]*statedb.V
 	return m
 }
 
-// PvtdataCompositeKeyMap is a map of PvtdataCompositeKey to VersionedValue
-type PvtdataCompositeKeyMap map[PvtdataCompositeKey]*statedb.VersionedValue
-
 // ToCompositeKeyMap rearranges the update batch data in the form of a single map
-func (p PvtUpdateBatch) ToCompositeKeyMap() PvtdataCompositeKeyMap {
-	m := make(PvtdataCompositeKeyMap)
+func (p PvtUpdateBatch) ToCompositeKeyMap() map[PvtdataCompositeKey]*statedb.VersionedValue {
+	m := make(map[PvtdataCompositeKey]*statedb.VersionedValue)
 	for ns, nsBatch := range p.UpdateMap {
 		for _, coll := range nsBatch.GetCollectionNames() {
 			for key, vv := range nsBatch.GetUpdates(coll) {

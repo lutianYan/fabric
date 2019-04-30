@@ -1,9 +1,18 @@
 /*
-Copyright IBM Corp. All Rights Reserved.
+Copyright IBM Corp. 2017 All Rights Reserved.
 
-SPDX-License-Identifier: Apache-2.0
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+		 http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
-
 package peer
 
 import (
@@ -13,17 +22,23 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/deliver"
 	"github.com/hyperledger/fabric/common/flogging"
-	"github.com/hyperledger/fabric/common/metrics"
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
 	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/peer"
 	"github.com/hyperledger/fabric/protos/utils"
+	"github.com/op/go-logging"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
 )
 
-var logger = flogging.MustGetLogger("common.deliverevents")
+const pkgLogID = "common/deliverevents"
+
+var logger *logging.Logger
+
+func init() {
+	logger = flogging.MustGetLogger(pkgLogID)
+}
 
 // PolicyCheckerProvider provides the corresponding policy checker for a
 // given resource name
@@ -61,18 +76,11 @@ type filteredBlockResponseSender struct {
 	peer.Deliver_DeliverFilteredServer
 }
 
-// SendStatusResponse generates status reply proto message
 func (fbrs *filteredBlockResponseSender) SendStatusResponse(status common.Status) error {
 	response := &peer.DeliverResponse{
 		Type: &peer.DeliverResponse_Status{Status: status},
 	}
 	return fbrs.Send(response)
-}
-
-// IsFiltered is a marker method which indicates that this response sender
-// sends filtered blocks.
-func (fbrs *filteredBlockResponseSender) IsFiltered() bool {
-	return true
 }
 
 // SendBlockResponse generates deliver response with block message
@@ -129,16 +137,15 @@ func (s *server) Deliver(srv peer.Deliver_DeliverServer) (err error) {
 
 // NewDeliverEventsServer creates a peer.Deliver server to deliver block and
 // filtered block events
-func NewDeliverEventsServer(mutualTLS bool, policyCheckerProvider PolicyCheckerProvider, chainManager deliver.ChainManager, metricsProvider metrics.Provider) peer.DeliverServer {
+func NewDeliverEventsServer(mutualTLS bool, policyCheckerProvider PolicyCheckerProvider, chainManager deliver.ChainManager) peer.DeliverServer {
 	timeWindow := viper.GetDuration("peer.authentication.timewindow")
 	if timeWindow == 0 {
 		defaultTimeWindow := 15 * time.Minute
 		logger.Warningf("`peer.authentication.timewindow` not set; defaulting to %s", defaultTimeWindow)
 		timeWindow = defaultTimeWindow
 	}
-	metrics := deliver.NewMetrics(metricsProvider)
 	return &server{
-		dh:                    deliver.NewHandler(chainManager, timeWindow, mutualTLS, metrics),
+		dh: deliver.NewHandler(chainManager, timeWindow, mutualTLS),
 		policyCheckerProvider: policyCheckerProvider,
 	}
 }

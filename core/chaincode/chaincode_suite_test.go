@@ -7,15 +7,15 @@ SPDX-License-Identifier: Apache-2.0
 package chaincode_test
 
 import (
-	"testing"
-
 	commonledger "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/core/chaincode"
-	"github.com/hyperledger/fabric/core/common/privdata"
+	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/container/ccintf"
 	"github.com/hyperledger/fabric/core/ledger"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+
+	"testing"
 )
 
 func TestChaincode(t *testing.T) {
@@ -33,9 +33,9 @@ type historyQueryExecutor interface {
 	ledger.HistoryQueryExecutor
 }
 
-//go:generate counterfeiter -o mock/results_iterator.go --fake-name QueryResultsIterator . queryResultsIterator
-type queryResultsIterator interface {
-	commonledger.QueryResultsIterator
+//go:generate counterfeiter -o mock/results_iterator.go --fake-name ResultsIterator . resultsIterator
+type resultsIterator interface {
+	commonledger.ResultsIterator
 }
 
 //go:generate counterfeiter -o mock/runtime.go --fake-name Runtime . chaincodeRuntime
@@ -53,6 +53,11 @@ type processor interface {
 	chaincode.Processor
 }
 
+//go:generate counterfeiter -o mock/executor.go --fake-name Executor . executor
+type executor interface {
+	chaincode.Executor
+}
+
 //go:generate counterfeiter -o mock/invoker.go --fake-name Invoker . invoker
 type invoker interface {
 	chaincode.Invoker
@@ -63,11 +68,9 @@ type packageProvider interface {
 	chaincode.PackageProvider
 }
 
-// This is a bit weird, we need to import the chaincode/lifecycle package, but there is an error,
-// even if we alias it to another name, so, calling 'lifecycleIface' instead of 'lifecycle'
-//go:generate counterfeiter -o mock/lifecycle.go --fake-name Lifecycle . lifecycleIface
-type lifecycleIface interface {
-	chaincode.Lifecycle
+//go:generate counterfeiter -o mock/cc_package.go --fake-name CCPackage . ccpackage
+type ccpackage interface {
+	ccprovider.CCPackage
 }
 
 //go:generate counterfeiter -o mock/chaincode_stream.go --fake-name ChaincodeStream . chaincodeStream
@@ -135,14 +138,4 @@ type queryResponseBuilder interface {
 //go:generate counterfeiter -o fake/registry.go --fake-name Registry . registry
 type registry interface {
 	chaincode.Registry
-}
-
-//go:generate counterfeiter -o fake/application_config_retriever.go --fake-name ApplicationConfigRetriever . applicationConfigRetriever
-type applicationConfigRetriever interface {
-	chaincode.ApplicationConfigRetriever
-}
-
-//go:generate counterfeiter -o mock/collection_store.go --fake-name CollectionStore . collectionStore
-type collectionStore interface {
-	privdata.CollectionStore
 }

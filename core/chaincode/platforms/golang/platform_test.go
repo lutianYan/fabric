@@ -19,15 +19,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hyperledger/fabric/core/chaincode/platforms"
 	"github.com/hyperledger/fabric/core/config/configtest"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-var _ = platforms.Platform(&Platform{})
 
 func testerr(err error, succ bool) error {
 	if succ && err != nil {
@@ -88,16 +85,12 @@ func TestValidateCDS(t *testing.T) {
 	specs := make([]spec, 0)
 	specs = append(specs, spec{CCName: "NoCode", Path: "path/to/nowhere", File: "/bin/warez", Mode: 0100400, SuccessExpected: false})
 	specs = append(specs, spec{CCName: "NoCode", Path: "path/to/somewhere", File: "/src/path/to/somewhere/main.go", Mode: 0100400, SuccessExpected: true})
-	specs = append(specs, spec{CCName: "NoCode", Path: "path/to/somewhere", File: "/bad-src/path/to/somewhere/main.go", Mode: 0100400, SuccessExpected: false})
 	specs = append(specs, spec{CCName: "NoCode", Path: "path/to/somewhere", File: "/src/path/to/somewhere/warez", Mode: 0100555, SuccessExpected: false})
-	specs = append(specs, spec{CCName: "NoCode", Path: "path/to/somewhere", File: "/META-INF/path/to/a/meta1", Mode: 0100555, SuccessExpected: false})
-	specs = append(specs, spec{CCName: "NoCode", Path: "path/to/somewhere", File: "/META-Inf/path/to/a/meta2", Mode: 0100400, SuccessExpected: false})
-	specs = append(specs, spec{CCName: "NoCode", Path: "path/to/somewhere", File: "META-INF/path/to/a/meta3", Mode: 0100400, SuccessExpected: true})
 
 	for _, s := range specs {
 		cds, err := generateFakeCDS(s.CCName, s.Path, s.File, s.Mode)
 
-		err = platform.ValidateCodePackage(cds.Bytes())
+		err = platform.ValidateDeploymentSpec(cds)
 		if s.SuccessExpected == true && err != nil {
 			t.Errorf("Unexpected failure: %s", err)
 		}
@@ -145,8 +138,13 @@ func Test_findSource(t *testing.T) {
 
 func Test_DeploymentPayload(t *testing.T) {
 	platform := &Platform{}
+	spec := &pb.ChaincodeSpec{
+		ChaincodeId: &pb.ChaincodeID{
+			Path: "github.com/hyperledger/fabric/examples/chaincode/go/example02/cmd",
+		},
+	}
 
-	payload, err := platform.GetDeploymentPayload("github.com/hyperledger/fabric/examples/chaincode/go/example02/cmd")
+	payload, err := platform.GetDeploymentPayload(spec)
 	assert.NoError(t, err)
 
 	t.Logf("payload size: %d", len(payload))
@@ -170,8 +168,13 @@ func Test_DeploymentPayload(t *testing.T) {
 
 func Test_DeploymentPayloadWithStateDBArtifacts(t *testing.T) {
 	platform := &Platform{}
+	spec := &pb.ChaincodeSpec{
+		ChaincodeId: &pb.ChaincodeID{
+			Path: "github.com/hyperledger/fabric/examples/chaincode/go/marbles02",
+		},
+	}
 
-	payload, err := platform.GetDeploymentPayload("github.com/hyperledger/fabric/examples/chaincode/go/marbles02")
+	payload, err := platform.GetDeploymentPayload(spec)
 	assert.NoError(t, err)
 
 	t.Logf("payload size: %d", len(payload))
@@ -199,47 +202,58 @@ func Test_DeploymentPayloadWithStateDBArtifacts(t *testing.T) {
 }
 
 func Test_decodeUrl(t *testing.T) {
-	path := "http://github.com/hyperledger/fabric/examples/chaincode/go/map"
-	if _, err := decodeUrl(path); err != nil {
+	cs := &pb.ChaincodeSpec{
+		ChaincodeId: &pb.ChaincodeID{
+			Name: "Test Chaincode",
+			Path: "http://github.com/hyperledger/fabric/examples/chaincode/go/map",
+		},
+	}
+
+	if _, err := decodeUrl(cs); err != nil {
 		t.Fail()
-		t.Logf("Error to decodeUrl unsuccessfully with valid path: %s, %s", path, err)
+		t.Logf("Error to decodeUrl unsuccessfully with valid path: %s, %s", cs.ChaincodeId.Path, err)
 	}
 
-	path = ""
-	if _, err := decodeUrl(path); err == nil {
+	cs.ChaincodeId.Path = ""
+
+	if _, err := decodeUrl(cs); err == nil {
 		t.Fail()
-		t.Logf("Error to decodeUrl successfully with invalid path: %s", path)
+		t.Logf("Error to decodeUrl successfully with invalid path: %s", cs.ChaincodeId.Path)
 	}
 
-	path = "/"
-	if _, err := decodeUrl(path); err == nil {
-		t.Fatalf("Error to decodeUrl successfully with invalid path: %s", path)
+	cs.ChaincodeId.Path = "/"
+
+	if _, err := decodeUrl(cs); err == nil {
+		t.Fail()
+		t.Logf("Error to decodeUrl successfully with invalid path: %s", cs.ChaincodeId.Path)
 	}
 
-	path = "http:///"
-	if _, err := decodeUrl(path); err == nil {
-		t.Fatalf("Error to decodeUrl successfully with invalid path: %s", path)
+	cs.ChaincodeId.Path = "http:///"
+
+	if _, err := decodeUrl(cs); err == nil {
+		t.Fail()
+		t.Logf("Error to decodeUrl successfully with invalid path: %s", cs.ChaincodeId.Path)
 	}
 }
 
-func TestValidatePath(t *testing.T) {
+func TestValidateSpec(t *testing.T) {
 	platform := &Platform{}
 
 	var tests = []struct {
-		path string
+		spec *pb.ChaincodeSpec
 		succ bool
 	}{
-		{path: "http://github.com/hyperledger/fabric/examples/chaincode/go/map", succ: true},
-		{path: "https://github.com/hyperledger/fabric/examples/chaincode/go/map", succ: true},
-		{path: "github.com/hyperledger/fabric/examples/chaincode/go/map", succ: true},
-		{path: "github.com/hyperledger/fabric/bad/chaincode/go/map", succ: false},
-		{path: ":github.com/hyperledger/fabric/examples/chaincode/go/map", succ: false},
+		{spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "http://github.com/hyperledger/fabric/examples/chaincode/go/map"}}, succ: true},
+		{spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "https://github.com/hyperledger/fabric/examples/chaincode/go/map"}}, succ: true},
+		{spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "github.com/hyperledger/fabric/examples/chaincode/go/map"}}, succ: true},
+		{spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "github.com/hyperledger/fabric/bad/chaincode/go/map"}}, succ: false},
+		{spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: ":github.com/hyperledger/fabric/examples/chaincode/go/map"}}, succ: false},
 	}
 
 	for _, tst := range tests {
-		err := platform.ValidatePath(tst.path)
+		err := platform.ValidateSpec(tst.spec)
 		if err = testerr(err, tst.succ); err != nil {
-			t.Errorf("Error validating chaincode spec: %s, %s", tst.path, err)
+			t.Errorf("Error validating chaincode spec: %s, %s", tst.spec.ChaincodeId.Path, err)
 		}
 	}
 }
@@ -270,24 +284,24 @@ func TestGetDeploymentPayload(t *testing.T) {
 
 	var tests = []struct {
 		gopath string
-		path   string
+		spec   *pb.ChaincodeSpec
 		succ   bool
 	}{
-		{gopath: defaultGopath, path: "github.com/hyperledger/fabric/examples/chaincode/go/map", succ: true},
-		{gopath: defaultGopath, path: "github.com/hyperledger/fabric/examples/bad/go/map", succ: false},
-		{gopath: testdataPath, path: "chaincodes/BadImport", succ: false},
-		{gopath: testdataPath, path: "chaincodes/BadMetadataInvalidIndex", succ: false},
-		{gopath: testdataPath, path: "chaincodes/BadMetadataUnexpectedFolderContent", succ: false},
-		{gopath: testdataPath, path: "chaincodes/BadMetadataIgnoreHiddenFile", succ: true},
-		{gopath: testdataPath, path: "chaincodes/empty/", succ: false},
+		{gopath: defaultGopath, spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "github.com/hyperledger/fabric/examples/chaincode/go/map"}}, succ: true},
+		{gopath: defaultGopath, spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "github.com/hyperledger/fabric/examples/bad/go/map"}}, succ: false},
+		{gopath: testdataPath, spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "chaincodes/BadImport"}}, succ: false},
+		{gopath: testdataPath, spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "chaincodes/BadMetadataInvalidIndex"}}, succ: false},
+		{gopath: testdataPath, spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "chaincodes/BadMetadataUnexpectedFolderContent"}}, succ: false},
+		{gopath: testdataPath, spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "chaincodes/BadMetadataIgnoreHiddenFile"}}, succ: true},
+		{gopath: testdataPath, spec: &pb.ChaincodeSpec{ChaincodeId: &pb.ChaincodeID{Name: "Test Chaincode", Path: "chaincodes/empty/"}}, succ: false},
 	}
 
 	for _, tst := range tests {
 		reset := updateGopath(t, tst.gopath)
-		_, err := platform.GetDeploymentPayload(tst.path)
+		_, err := platform.GetDeploymentPayload(tst.spec)
 		t.Log(err)
 		if err = testerr(err, tst.succ); err != nil {
-			t.Errorf("Error validating chaincode spec: %s, %s", tst.path, err)
+			t.Errorf("Error validating chaincode spec: %s, %s", tst.spec.ChaincodeId.Path, err)
 		}
 		reset()
 	}
@@ -343,7 +357,7 @@ func TestGenerateDockerBuild(t *testing.T) {
 					},
 				},
 			}
-			cds.CodePackage, err = platform.GetDeploymentPayload(tst.Path)
+			cds.CodePackage, err = platform.GetDeploymentPayload(cds.ChaincodeSpec)
 			if err = testerr(err, tst.SuccessExpected); err != nil {
 				t.Errorf("test failed in GetDeploymentPayload: %s, %s", cds.ChaincodeSpec.ChaincodeId.Path, err)
 			}
@@ -351,10 +365,10 @@ func TestGenerateDockerBuild(t *testing.T) {
 			cds, err = generateFakeCDS(tst.CCName, tst.Path, tst.File, tst.Mode)
 		}
 
-		if _, err = platform.GenerateDockerfile(); err != nil {
+		if _, err = platform.GenerateDockerfile(cds); err != nil {
 			t.Errorf("could not generate docker file for a valid spec: %s, %s", cds.ChaincodeSpec.ChaincodeId.Path, err)
 		}
-		err = platform.GenerateDockerBuild(cds.Path(), cds.Bytes(), tw)
+		err = platform.GenerateDockerBuild(cds, tw)
 		if err = testerr(err, tst.SuccessExpected); err != nil {
 			t.Errorf("Error validating chaincode spec: %s, %s", cds.ChaincodeSpec.ChaincodeId.Path, err)
 		}

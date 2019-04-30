@@ -72,25 +72,17 @@ func makeTestCase(ledgerHeight uint64, mcs api.MessageCryptoService, shouldSucce
 		deliverer := &mocks.MockBlocksDeliverer{Pos: ledgerHeight}
 		deliverer.MockRecv = rcv
 		provider := NewBlocksProvider("***TEST_CHAINID***", deliverer, gossipServiceAdapter, mcs)
-
-		wg := sync.WaitGroup{}
-		wg.Add(1)
-
+		defer provider.Stop()
+		ready := make(chan struct{})
 		go func() {
-			defer wg.Done()
-			provider.DeliverBlocks()
+			go provider.DeliverBlocks()
+			// Send notification
+			ready <- struct{}{}
 		}()
 
-		for {
-			time.Sleep(100 * time.Millisecond)
-			if deliverer.RecvCount() > 0 {
-				provider.Stop()
-				break
-			}
-		}
-		assertDelivery(t, gossipServiceAdapter, deliverer, shouldSucceed)
+		time.Sleep(time.Second)
 
-		wg.Wait()
+		assertDelivery(t, gossipServiceAdapter, deliverer, shouldSucceed)
 	}
 }
 
@@ -102,7 +94,7 @@ func assertDelivery(t *testing.T, ga *mocks.MockGossipServiceAdapter, deliverer 
 		if !shouldSucceed {
 			assert.Fail(t, "Should not have succeede")
 		}
-		assert.Equal(t, deliverer.RecvCount(), ga.AddPayloadCount())
+		assert.True(t, deliverer.RecvCnt == ga.AddPayloadsCnt)
 	case <-time.After(time.Second):
 		if shouldSucceed {
 			assert.Fail(t, "Didn't gossip a block within a timely manner")
@@ -181,9 +173,9 @@ func TestBlocksProvider_CheckTerminationDeliveryResponseStatus(t *testing.T) {
 	select {
 	case <-ready:
 		{
-			assert.Equal(t, int32(1), tmp.RecvCount())
+			assert.Equal(t, int32(1), tmp.RecvCnt)
 			// No payload should commit locally
-			assert.Equal(t, int32(0), gossipServiceAdapter.AddPayloadCount())
+			assert.Equal(t, int32(0), gossipServiceAdapter.AddPayloadsCnt)
 			// No payload should be transferred to other peers
 			select {
 			case <-gossipServiceAdapter.GossipBlockDisseminations:

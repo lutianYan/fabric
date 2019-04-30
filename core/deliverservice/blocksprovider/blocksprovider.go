@@ -20,6 +20,7 @@ import (
 	"github.com/hyperledger/fabric/protos/common"
 	gossip_proto "github.com/hyperledger/fabric/protos/gossip"
 	"github.com/hyperledger/fabric/protos/orderer"
+	"github.com/op/go-logging"
 )
 
 // LedgerInfo an adapter to provide the interface to query
@@ -102,7 +103,12 @@ type blocksProviderImpl struct {
 const wrongStatusThreshold = 10
 
 var maxRetryDelay = time.Second * 10
-var logger = flogging.MustGetLogger("blocksProvider")
+
+var logger *logging.Logger // package-level logger
+
+func init() {
+	logger = flogging.MustGetLogger("blocksProvider")
+}
 
 // NewBlocksProvider constructor function to create blocks deliverer instance
 func NewBlocksProvider(chainID string, client streamClient, gossip GossipServiceAdapter, mcs api.MessageCryptoService) BlocksProvider {
@@ -117,18 +123,26 @@ func NewBlocksProvider(chainID string, client streamClient, gossip GossipService
 
 // DeliverBlocks used to pull out blocks from the ordering service to
 // distributed them across peers
+//处理deliver服务响应消息
+//用于分析处理Orderer节点返回的Deliver服务响应消息，包括两种消息类型
 func (b *blocksProviderImpl) DeliverBlocks() {
 	errorStatusCounter := 0
 	statusCounter := 0
 	defer b.client.Close()
+	//检查是否停止处理
 	for !b.isDone() {
+		//等待接收消息
 		msg, err := b.client.Recv()
 		if err != nil {
 			logger.Warningf("[%s] Receive error: %s", b.chainID, err.Error())
 			return
 		}
+		//分析消息类型
 		switch t := msg.Type.(type) {
+		//DeliverResponse状态消息
 		case *orderer.DeliverResponse_Status:
+			//说明本次区块请求执行成功，表示已经接收完毕区块请求消息指定范围内的区块数据
+			//除此之外的其他状态消息都是飞成功的执行状态消息
 			if t.Status == common.Status_SUCCESS {
 				logger.Warningf("[%s] ERROR! Received success for a seek that should never complete", b.chainID)
 				return
@@ -156,40 +170,55 @@ func (b *blocksProviderImpl) DeliverBlocks() {
 				b.client.Disconnect(true)
 			}
 			continue
+		//DeliverResponse区块消息
+		//该类型的消息包含请求获取的区块数据
 		case *orderer.DeliverResponse_Block:
 			errorStatusCounter = 0
 			statusCounter = 0
-			blockNum := t.Block.Header.Number
+			//获取区块号
+			seqNum := t.Block.Header.Number
 
+			//获取经过序列化的区块字节数组
 			marshaledBlock, err := proto.Marshal(t.Block)
 			if err != nil {
-				logger.Errorf("[%s] Error serializing block with sequence number %d, due to %s", b.chainID, blockNum, err)
+				logger.Errorf("[%s] Error serializing block with sequence number %d, due to %s", b.chainID, seqNum, err)
 				continue
 			}
-			if err := b.mcs.VerifyBlock(gossipcommon.ChainID(b.chainID), blockNum, marshaledBlock); err != nil {
-				logger.Errorf("[%s] Error verifying block with sequnce number %d, due to %s", b.chainID, blockNum, err)
+			//验证区块
+			//验证该区块对象的有效性，包括消息合法性（例如：头部的通道ID、区块hash值等）、验证元数据签名满足区块验证策略
+			if err := b.mcs.VerifyBlock(gossipcommon.ChainID(b.chainID), seqNum, marshaledBlock); err != nil {
+				logger.Errorf("[%s] Error verifying block with sequnce number %d, due to %s", b.chainID, seqNum, err)
 				continue
 			}
 
+			//获取通道peer节点数量
 			numberOfPeers := len(b.gossip.PeersOfChannel(gossipcommon.ChainID(b.chainID)))
 			// Create payload with a block received
-			payload := createPayload(blockNum, marshaledBlock)
+			//创建消息负载
+			//创建Gossip消息负载payload，该对象封装了区块号与区块字节数组，未指定privateData字段上的隐私数据明文读写集nil
+			//实际上，隐私数据是由Endorsee背书节点通过Gossip消息协议传播到组织内的其他授权节点，而不是经过Orderer节点广播到通道中，并最终由transient隐私数据存储对象暂时保存在本地的transient隐私数据库上
+			//同时，计算隐私数据读写集的hash值，并封装到交易模拟集执行结果的共有数据读写集中，与公共数据一起提交到Orderer节点请求排序打包出块
+			//目前，区块中不包含隐私数据明文，如果经过Orderer节点传播给组织内的其他节点，则存在隐私信息泄露的风险
+			payload := createPayload(seqNum, marshaledBlock)
 			// Use payload to create gossip message
+			//创建gossip消息
 			gossipMsg := createGossipMsg(b.chainID, payload)
 
-			logger.Debugf("[%s] Adding payload to local buffer, blockNum = [%d]", b.chainID, blockNum)
+			logger.Debugf("[%s] Adding payload locally, buffer seqNum = [%d], peers number [%d]", b.chainID, seqNum, numberOfPeers)
 			// Add payload to local state payloads buffer
+			//添加消息负载到本地消息负载缓冲区，等待Committer记账节点验证处理并提交账本
 			if err := b.gossip.AddPayload(b.chainID, payload); err != nil {
-				logger.Warningf("Block [%d] received from ordering service wasn't added to payload buffer: %v", blockNum, err)
+				logger.Warning("Failed adding payload of", seqNum, "because:", err)
 			}
 
 			// Gossip messages with other nodes
-			logger.Debugf("[%s] Gossiping block [%d], peers number [%d]", b.chainID, blockNum, numberOfPeers)
+			logger.Debugf("[%s] Gossiping block [%d], peers number [%d]", b.chainID, seqNum, numberOfPeers)
 			if !b.isDone() {
+				//通过gossip消息协议发送区块消息到组织内的其他节点，并保存到该节点的消息存储器上
 				b.gossip.Gossip(gossipMsg)
 			}
 		default:
-			logger.Warningf("[%s] Received unknown: %v", b.chainID, t)
+			logger.Warningf("[%s] Received unknown: ", b.chainID, t)
 			return
 		}
 	}

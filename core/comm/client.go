@@ -55,13 +55,9 @@ func NewGRPCClient(config ClientConfig) (*GRPCClient, error) {
 			Timeout: DefaultKeepaliveOptions.ClientTimeout}
 	}
 	kap.PermitWithoutStream = true
-	// set keepalive
-	client.dialOpts = append(client.dialOpts, grpc.WithKeepaliveParams(kap))
-	// Unless asynchronous connect is set, make connection establishment blocking.
-	if !config.AsyncConnect {
-		client.dialOpts = append(client.dialOpts, grpc.WithBlock())
-		client.dialOpts = append(client.dialOpts, grpc.FailOnNonTempDialError(true))
-	}
+	// set keepalive and blocking
+	client.dialOpts = append(client.dialOpts, grpc.WithKeepaliveParams(kap),
+		grpc.WithBlock())
 	client.timeout = config.Timeout
 	// set send/recv message size to package defaults
 	client.maxRecvMsgSize = MaxRecvMsgSize
@@ -76,8 +72,7 @@ func (client *GRPCClient) parseSecureOptions(opts *SecureOptions) error {
 		return nil
 	}
 	client.tlsConfig = &tls.Config{
-		VerifyPeerCertificate: opts.VerifyCertificate,
-		MinVersion:            tls.VersionTLS12} // TLS 1.2 only
+		MinVersion: tls.VersionTLS12} // TLS 1.2 only
 	if len(opts.ServerRootCAs) > 0 {
 		client.tlsConfig.RootCAs = x509.NewCertPool()
 		for _, certBytes := range opts.ServerRootCAs {

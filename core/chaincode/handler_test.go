@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/hyperledger/fabric/common/metrics/metricsfakes"
-	"github.com/hyperledger/fabric/common/mocks/config"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
 	"github.com/hyperledger/fabric/core/chaincode"
@@ -25,6 +23,7 @@ import (
 	. "github.com/onsi/ginkgo/extensions/table"
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
+	"golang.org/x/net/context"
 )
 
 var _ = Describe("Handler", func() {
@@ -42,12 +41,6 @@ var _ = Describe("Handler", func() {
 		fakeInvoker                    *mock.Invoker
 		fakeLedgerGetter               *mock.LedgerGetter
 		fakeHandlerRegistry            *fake.Registry
-		fakeApplicationConfigRetriever *fake.ApplicationConfigRetriever
-		fakeCollectionStore            *mock.CollectionStore
-		fakeShimRequestsReceived       *metricsfakes.Counter
-		fakeShimRequestsCompleted      *metricsfakes.Counter
-		fakeShimRequestDuration        *metricsfakes.Histogram
-		fakeExecuteTimeouts            *metricsfakes.Counter
 
 		responseNotifier chan *pb.ChaincodeMessage
 		txContext        *chaincode.TransactionContext
@@ -64,16 +57,12 @@ var _ = Describe("Handler", func() {
 
 		fakeTxSimulator = &mock.TxSimulator{}
 		fakeHistoryQueryExecutor = &mock.HistoryQueryExecutor{}
-		fakeCollectionStore = &mock.CollectionStore{}
-
 		responseNotifier = make(chan *pb.ChaincodeMessage, 1)
 		txContext = &chaincode.TransactionContext{
-			ChainID:                 "channel-id",
-			TXSimulator:             fakeTxSimulator,
-			HistoryQueryExecutor:    fakeHistoryQueryExecutor,
-			ResponseNotifier:        responseNotifier,
-			CollectionStore:         fakeCollectionStore,
-			AllowedCollectionAccess: make(map[string]bool),
+			ChainID:              "channel-id",
+			TXSimulator:          fakeTxSimulator,
+			HistoryQueryExecutor: fakeHistoryQueryExecutor,
+			ResponseNotifier:     responseNotifier,
 		}
 
 		fakeACLProvider = &mock.ACLProvider{}
@@ -87,28 +76,6 @@ var _ = Describe("Handler", func() {
 		fakeContextRegistry = &fake.ContextRegistry{}
 		fakeContextRegistry.GetReturns(txContext)
 		fakeContextRegistry.CreateReturns(txContext, nil)
-
-		fakeApplicationConfigRetriever = &fake.ApplicationConfigRetriever{}
-		applicationCapability := &config.MockApplication{
-			CapabilitiesRv: &config.MockApplicationCapabilities{KeyLevelEndorsementRv: true},
-		}
-		fakeApplicationConfigRetriever.GetApplicationConfigReturns(applicationCapability, true)
-
-		fakeShimRequestsReceived = &metricsfakes.Counter{}
-		fakeShimRequestsReceived.WithReturns(fakeShimRequestsReceived)
-		fakeShimRequestsCompleted = &metricsfakes.Counter{}
-		fakeShimRequestsCompleted.WithReturns(fakeShimRequestsCompleted)
-		fakeShimRequestDuration = &metricsfakes.Histogram{}
-		fakeShimRequestDuration.WithReturns(fakeShimRequestDuration)
-		fakeExecuteTimeouts = &metricsfakes.Counter{}
-		fakeExecuteTimeouts.WithReturns(fakeExecuteTimeouts)
-
-		chaincodeMetrics := &chaincode.HandlerMetrics{
-			ShimRequestsReceived:  fakeShimRequestsReceived,
-			ShimRequestsCompleted: fakeShimRequestsCompleted,
-			ShimRequestDuration:   fakeShimRequestDuration,
-			ExecuteTimeouts:       fakeExecuteTimeouts,
-		}
 
 		handler = &chaincode.Handler{
 			ACLProvider:                fakeACLProvider,
@@ -125,11 +92,9 @@ var _ = Describe("Handler", func() {
 			UUIDGenerator: chaincode.UUIDGeneratorFunc(func() string {
 				return "generated-query-id"
 			}),
-			AppConfig: fakeApplicationConfigRetriever,
-			Metrics:   chaincodeMetrics,
 		}
 		chaincode.SetHandlerChatStream(handler, fakeChatStream)
-		chaincode.SetHandlerChaincodeID(handler, &pb.ChaincodeID{Name: "test-handler-name", Version: "1.0"})
+		chaincode.SetHandlerChaincodeID(handler, &pb.ChaincodeID{Name: "test-handler-name"})
 		chaincode.SetHandlerCCInstance(handler, &sysccprovider.ChaincodeInstance{ChaincodeName: "cc-instance-name"})
 	})
 
@@ -205,99 +170,7 @@ var _ = Describe("Handler", func() {
 			Expect(transactionID).To(Equal("tx-id"))
 		})
 
-		It("records shim requests received before requests completed", func() {
-			fakeShimRequestsReceived.AddStub = func(delta float64) {
-				defer GinkgoRecover()
-				Expect(fakeShimRequestsCompleted.AddCallCount()).To(Equal(0))
-			}
-
-			handler.HandleTransaction(incomingMessage, fakeMessageHandler.Handle)
-			Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
-			msg := fakeChatStream.SendArgsForCall(0)
-			Expect(msg).To(Equal(expectedResponse))
-
-			Expect(fakeShimRequestsReceived.WithCallCount()).To(Equal(1))
-			labelValues := fakeShimRequestsReceived.WithArgsForCall(0)
-			Expect(labelValues).To(Equal([]string{
-				"type", "GET_STATE",
-				"channel", "channel-id",
-				"chaincode", "test-handler-name:1.0",
-			}))
-			Expect(fakeShimRequestsReceived.AddCallCount()).To(Equal(1))
-			Expect(fakeShimRequestsReceived.AddArgsForCall(0)).To(BeNumerically("~", 1.0))
-		})
-
-		It("records transactions completed after transactions received", func() {
-			fakeShimRequestsCompleted.AddStub = func(delta float64) {
-				defer GinkgoRecover()
-				Expect(fakeShimRequestsReceived.AddCallCount()).To(Equal(1))
-			}
-
-			handler.HandleTransaction(incomingMessage, fakeMessageHandler.Handle)
-			Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
-
-			Expect(fakeShimRequestsCompleted.WithCallCount()).To(Equal(1))
-			labelValues := fakeShimRequestsCompleted.WithArgsForCall(0)
-			Expect(labelValues).To(Equal([]string{
-				"type", "GET_STATE",
-				"channel", "channel-id",
-				"chaincode", "test-handler-name:1.0",
-				"success", "true",
-			}))
-			Expect(fakeShimRequestsCompleted.AddCallCount()).To(Equal(1))
-			Expect(fakeShimRequestsCompleted.AddArgsForCall(0)).To(BeNumerically("~", 1.0))
-		})
-
-		It("records transactions duration", func() {
-			handler.HandleTransaction(incomingMessage, fakeMessageHandler.Handle)
-			Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
-
-			Expect(fakeShimRequestDuration.WithCallCount()).To(Equal(1))
-			labelValues := fakeShimRequestDuration.WithArgsForCall(0)
-			Expect(labelValues).To(Equal([]string{
-				"type", "GET_STATE",
-				"channel", "channel-id",
-				"chaincode", "test-handler-name:1.0",
-				"success", "true",
-			}))
-			Expect(fakeShimRequestDuration.ObserveArgsForCall(0)).NotTo(BeZero())
-			Expect(fakeShimRequestDuration.ObserveArgsForCall(0)).To(BeNumerically("<", 1.0))
-		})
-
-		Context("when the transaction returns an error", func() {
-			BeforeEach(func() {
-				fakeMessageHandler.HandleReturns(nil, errors.New("I am a total failure"))
-			})
-
-			It("records metrics with success=false", func() {
-				handler.HandleTransaction(incomingMessage, fakeMessageHandler.Handle)
-				Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
-
-				Expect(fakeShimRequestsCompleted.WithCallCount()).To(Equal(1))
-				labelValues := fakeShimRequestsCompleted.WithArgsForCall(0)
-				Expect(labelValues).To(Equal([]string{
-					"type", "GET_STATE",
-					"channel", "channel-id",
-					"chaincode", "test-handler-name:1.0",
-					"success", "false",
-				}))
-				Expect(fakeShimRequestsCompleted.AddCallCount()).To(Equal(1))
-				Expect(fakeShimRequestsCompleted.AddArgsForCall(0)).To(BeNumerically("~", 1.0))
-
-				Expect(fakeShimRequestDuration.WithCallCount()).To(Equal(1))
-				labelValues = fakeShimRequestDuration.WithArgsForCall(0)
-				Expect(labelValues).To(Equal([]string{
-					"type", "GET_STATE",
-					"channel", "channel-id",
-					"chaincode", "test-handler-name:1.0",
-					"success", "false",
-				}))
-				Expect(fakeShimRequestDuration.ObserveArgsForCall(0)).NotTo(BeZero())
-				Expect(fakeShimRequestDuration.ObserveArgsForCall(0)).To(BeNumerically("<", 1.0))
-			})
-		})
-
-		Context("when the transaction ID has already been registered", func() {
+		Context("wwhen the transaction ID has already been regustered", func() {
 			BeforeEach(func() {
 				fakeTransactionRegistry.AddReturns(false)
 			})
@@ -484,7 +357,7 @@ var _ = Describe("Handler", func() {
 						msg := fakeChatStream.SendArgsForCall(0)
 						Expect(msg.Type).To(Equal(pb.ChaincodeMessage_ERROR))
 						Expect(msg.Txid).To(Equal("tx-id"))
-						Expect(string(msg.Payload)).To(HavePrefix("INVOKE_CHAINCODE failed: transaction ID: tx-id: unmarshal failed: proto: "))
+						Expect(string(msg.Payload)).To(HavePrefix("INVOKE_CHAINCODE failed: transaction ID: tx-id: unmarshal failed: proto: peer.ChaincodeSpec: "))
 					})
 				})
 			})
@@ -547,7 +420,7 @@ var _ = Describe("Handler", func() {
 
 			It("returns an error", func() {
 				_, err := handler.HandlePutState(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
+				Expect(err).To(MatchError("unmarshal failed: proto: peer.PutState: wiretype end group for non-group"))
 			})
 		})
 
@@ -595,163 +468,13 @@ var _ = Describe("Handler", func() {
 				Expect(value).To(Equal([]byte("put-state-value")))
 			})
 
-			Context("when SetPrivateData fails due to ledger error", func() {
+			Context("when SetPrivateData fails", func() {
 				BeforeEach(func() {
 					fakeTxSimulator.SetPrivateDataReturns(errors.New("godzilla"))
 				})
 
 				It("returns an error", func() {
 					_, err := handler.HandlePutState(incomingMessage, txContext)
-					Expect(err).To(MatchError("godzilla"))
-				})
-			})
-
-			Context("when SetPrivateData fails due to Init transaction", func() {
-				BeforeEach(func() {
-					txContext.IsInitTransaction = true
-				})
-
-				It("returns the error from errorIfInitTransaction", func() {
-					_, err := handler.HandlePutState(incomingMessage, txContext)
-					Expect(err).To(MatchError("private data APIs are not allowed in chaincode Init()"))
-				})
-			})
-		})
-	})
-
-	Describe("HandlePutStateMetadata", func() {
-		var incomingMessage *pb.ChaincodeMessage
-		var request *pb.PutStateMetadata
-
-		BeforeEach(func() {
-			request = &pb.PutStateMetadata{
-				Key: "put-state-key",
-				Metadata: &pb.StateMetadata{
-					Metakey: "put-state-metakey",
-					Value:   []byte("put-state-metadata-value"),
-				},
-			}
-			payload, err := proto.Marshal(request)
-			Expect(err).NotTo(HaveOccurred())
-
-			incomingMessage = &pb.ChaincodeMessage{
-				Type:      pb.ChaincodeMessage_PUT_STATE_METADATA,
-				Payload:   payload,
-				Txid:      "tx-id",
-				ChannelId: "channel-id",
-			}
-		})
-
-		It("returns a response message", func() {
-			resp, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(resp).To(Equal(&pb.ChaincodeMessage{
-				Type:      pb.ChaincodeMessage_RESPONSE,
-				Txid:      "tx-id",
-				ChannelId: "channel-id",
-			}))
-		})
-
-		It("acquires application config for the channel", func() {
-			_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(fakeApplicationConfigRetriever.GetApplicationConfigCallCount()).To(Equal(1))
-			cid := fakeApplicationConfigRetriever.GetApplicationConfigArgsForCall(0)
-			Expect(cid).To(Equal("channel-id"))
-		})
-
-		Context("when getting the app config metadata fails", func() {
-			BeforeEach(func() {
-				fakeApplicationConfigRetriever.GetApplicationConfigReturns(nil, false)
-			})
-
-			It("returns an error", func() {
-				_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
-				Expect(err).To(MatchError("application config does not exist for channel-id"))
-			})
-		})
-
-		Context("when key level endorsement is not supported", func() {
-			BeforeEach(func() {
-				applicationCapability := &config.MockApplication{
-					CapabilitiesRv: &config.MockApplicationCapabilities{KeyLevelEndorsementRv: false},
-				}
-				fakeApplicationConfigRetriever.GetApplicationConfigReturns(applicationCapability, true)
-			})
-
-			It("returns an error", func() {
-				_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
-				Expect(err).To(MatchError("key level endorsement is not enabled, channel application capability of V1_3 or later is required"))
-			})
-		})
-
-		Context("when unmarshaling the request fails", func() {
-			BeforeEach(func() {
-				incomingMessage.Payload = []byte("this-is-a-bogus-payload")
-			})
-
-			It("returns an error", func() {
-				_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
-			})
-		})
-
-		Context("when the collection is not provided", func() {
-			It("calls SetStateMetadata on the transaction simulator", func() {
-				_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
-				Expect(err).NotTo(HaveOccurred())
-
-				Expect(fakeTxSimulator.SetStateMetadataCallCount()).To(Equal(1))
-				ccname, key, value := fakeTxSimulator.SetStateMetadataArgsForCall(0)
-				Expect(ccname).To(Equal("cc-instance-name"))
-				Expect(key).To(Equal("put-state-key"))
-				Expect(value).To(Equal(map[string][]byte{
-					"put-state-metakey": []byte("put-state-metadata-value"),
-				}))
-			})
-
-			Context("when SetStateMetadata fails", func() {
-				BeforeEach(func() {
-					fakeTxSimulator.SetStateMetadataReturns(errors.New("king-kong"))
-				})
-
-				It("returns an error", func() {
-					_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
-					Expect(err).To(MatchError("king-kong"))
-				})
-			})
-		})
-
-		Context("when the collection is provided", func() {
-			BeforeEach(func() {
-				request.Collection = "collection-name"
-				payload, err := proto.Marshal(request)
-				Expect(err).NotTo(HaveOccurred())
-				incomingMessage.Payload = payload
-			})
-
-			It("calls SetPrivateDataMetadata on the transaction simulator", func() {
-				_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
-				Expect(err).NotTo(HaveOccurred())
-
-				Expect(fakeTxSimulator.SetPrivateDataMetadataCallCount()).To(Equal(1))
-				ccname, collection, key, value := fakeTxSimulator.SetPrivateDataMetadataArgsForCall(0)
-				Expect(ccname).To(Equal("cc-instance-name"))
-				Expect(collection).To(Equal("collection-name"))
-				Expect(key).To(Equal("put-state-key"))
-				Expect(value).To(Equal(map[string][]byte{
-					"put-state-metakey": []byte("put-state-metadata-value"),
-				}))
-			})
-
-			Context("when SetPrivateDataMetadata fails", func() {
-				BeforeEach(func() {
-					fakeTxSimulator.SetPrivateDataMetadataReturns(errors.New("godzilla"))
-				})
-
-				It("returns an error", func() {
-					_, err := handler.HandlePutStateMetadata(incomingMessage, txContext)
 					Expect(err).To(MatchError("godzilla"))
 				})
 			})
@@ -794,7 +517,7 @@ var _ = Describe("Handler", func() {
 
 			It("returns an error", func() {
 				_, err := handler.HandleDelState(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
+				Expect(err).To(MatchError("unmarshal failed: proto: peer.DelState: wiretype end group for non-group"))
 			})
 		})
 
@@ -840,7 +563,7 @@ var _ = Describe("Handler", func() {
 				Expect(key).To(Equal("del-state-key"))
 			})
 
-			Context("when DeletePrivateData fails due to ledger error", func() {
+			Context("when DeletePrivateData returns an error", func() {
 				BeforeEach(func() {
 					fakeTxSimulator.DeletePrivateDataReturns(errors.New("mango"))
 				})
@@ -848,17 +571,6 @@ var _ = Describe("Handler", func() {
 				It("returns an error", func() {
 					_, err := handler.HandleDelState(incomingMessage, txContext)
 					Expect(err).To(MatchError("mango"))
-				})
-			})
-
-			Context("when DeletePrivateData fails due to Init transaction", func() {
-				BeforeEach(func() {
-					txContext.IsInitTransaction = true
-				})
-
-				It("returns the error from errorIfInitTransaction", func() {
-					_, err := handler.HandleDelState(incomingMessage, txContext)
-					Expect(err).To(MatchError("private data APIs are not allowed in chaincode Init()"))
 				})
 			})
 		})
@@ -899,7 +611,7 @@ var _ = Describe("Handler", func() {
 
 			It("returns an error", func() {
 				_, err := handler.HandleGetState(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
+				Expect(err).To(MatchError("unmarshal failed: proto: peer.GetState: wiretype end group for non-group"))
 			})
 		})
 
@@ -910,7 +622,6 @@ var _ = Describe("Handler", func() {
 				Expect(err).NotTo(HaveOccurred())
 				incomingMessage.Payload = payload
 
-				fakeCollectionStore.HasReadAccessReturns(true, nil)
 				fakeTxSimulator.GetPrivateDataReturns([]byte("get-private-data-response"), nil)
 				expectedResponse.Payload = []byte("get-private-data-response")
 			})
@@ -926,7 +637,7 @@ var _ = Describe("Handler", func() {
 				Expect(key).To(Equal("get-state-key"))
 			})
 
-			Context("and GetPrivateData fails due to ledger error", func() {
+			Context("and GetPrivateData fails", func() {
 				BeforeEach(func() {
 					fakeTxSimulator.GetPrivateDataReturns(nil, errors.New("french fries"))
 				})
@@ -934,60 +645,6 @@ var _ = Describe("Handler", func() {
 				It("returns the error from GetPrivateData", func() {
 					_, err := handler.HandleGetState(incomingMessage, txContext)
 					Expect(err).To(MatchError("french fries"))
-				})
-			})
-
-			Context("and GetPrivateData fails due to no read access", func() {
-				BeforeEach(func() {
-					fakeCollectionStore.HasReadAccessReturns(false, nil)
-				})
-
-				It("returns the error from errorIfCreatorHasNoReadAccess", func() {
-					_, err := handler.HandleGetState(incomingMessage, txContext)
-					Expect(err).To(MatchError("tx creator does not have read access" +
-						" permission on privatedata in chaincodeName:cc-instance-name" +
-						" collectionName: collection-name"))
-				})
-			})
-
-			Context("and GetPrivateData fails due to error in checking the read access", func() {
-				BeforeEach(func() {
-					fakeCollectionStore.HasReadAccessReturns(false, errors.New("no collection config"))
-				})
-
-				It("returns the error from errorIfCreatorHasNoReadAccess", func() {
-					_, err := handler.HandleGetState(incomingMessage, txContext)
-					Expect(err).To(MatchError("no collection config"))
-				})
-			})
-
-			Context("and GetPrivateData fails due to Init transaction", func() {
-				BeforeEach(func() {
-					txContext.IsInitTransaction = true
-				})
-
-				It("returns the error from errorIfInitTransaction", func() {
-					_, err := handler.HandleGetState(incomingMessage, txContext)
-					Expect(err).To(MatchError("private data APIs are not allowed in chaincode Init()"))
-				})
-			})
-
-			Context("and GetPrivateData returns the response message", func() {
-				BeforeEach(func() {
-					txContext.AllowedCollectionAccess["collection-name"] = true
-					fakeCollectionStore.HasReadAccessReturns(false, nil) // to
-					// ensure that the access cache is used
-				})
-
-				It("returns the the response message from GetPrivateData", func() {
-					resp, err := handler.HandleGetState(incomingMessage, txContext)
-					Expect(err).NotTo(HaveOccurred())
-					Expect(resp).To(Equal(&pb.ChaincodeMessage{
-						Type:      pb.ChaincodeMessage_RESPONSE,
-						Payload:   []byte("get-private-data-response"),
-						Txid:      "tx-id",
-						ChannelId: "channel-id",
-					}))
 				})
 			})
 
@@ -1043,216 +700,12 @@ var _ = Describe("Handler", func() {
 		})
 	})
 
-	Describe("HandleGetStateMetadata", func() {
-		var (
-			incomingMessage  *pb.ChaincodeMessage
-			request          *pb.GetStateMetadata
-			expectedResponse *pb.ChaincodeMessage
-		)
-
-		BeforeEach(func() {
-			request = &pb.GetStateMetadata{
-				Key: "get-state-key",
-			}
-			payload, err := proto.Marshal(request)
-			Expect(err).NotTo(HaveOccurred())
-
-			incomingMessage = &pb.ChaincodeMessage{
-				Type:      pb.ChaincodeMessage_GET_STATE_METADATA,
-				Payload:   payload,
-				Txid:      "tx-id",
-				ChannelId: "channel-id",
-			}
-
-			expectedResponse = &pb.ChaincodeMessage{
-				Type:      pb.ChaincodeMessage_RESPONSE,
-				Txid:      "tx-id",
-				ChannelId: "channel-id",
-			}
-		})
-
-		It("acquires application config for the channel", func() {
-			_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-			Expect(err).NotTo(HaveOccurred())
-
-			Expect(fakeApplicationConfigRetriever.GetApplicationConfigCallCount()).To(Equal(1))
-			cid := fakeApplicationConfigRetriever.GetApplicationConfigArgsForCall(0)
-			Expect(cid).To(Equal("channel-id"))
-		})
-
-		Context("when getting the app config metadata fails", func() {
-			BeforeEach(func() {
-				fakeApplicationConfigRetriever.GetApplicationConfigReturns(nil, false)
-			})
-
-			It("returns an error", func() {
-				_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-				Expect(err).To(MatchError("application config does not exist for channel-id"))
-			})
-		})
-
-		Context("when key level endorsement is not supported", func() {
-			BeforeEach(func() {
-				applicationCapability := &config.MockApplication{
-					CapabilitiesRv: &config.MockApplicationCapabilities{KeyLevelEndorsementRv: false},
-				}
-				fakeApplicationConfigRetriever.GetApplicationConfigReturns(applicationCapability, true)
-			})
-
-			It("returns an error", func() {
-				_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-				Expect(err).To(MatchError("key level endorsement is not enabled, channel application capability of V1_3 or later is required"))
-			})
-		})
-
-		Context("when unmarshalling the request fails", func() {
-			BeforeEach(func() {
-				incomingMessage.Payload = []byte("this-is-a-bogus-payload")
-			})
-
-			It("returns an error", func() {
-				_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
-			})
-		})
-
-		Context("when collection is set", func() {
-			BeforeEach(func() {
-				request.Collection = "collection-name"
-				payload, err := proto.Marshal(request)
-				Expect(err).NotTo(HaveOccurred())
-				incomingMessage.Payload = payload
-
-				metadata := map[string][]byte{
-					"get-state-metakey": []byte("get-private-metadata-response"),
-				}
-				fakeCollectionStore.HasReadAccessReturns(true, nil)
-				fakeTxSimulator.GetPrivateDataMetadataReturns(metadata, nil)
-				responsePayload, err := proto.Marshal(&pb.StateMetadataResult{
-					Entries: []*pb.StateMetadata{{
-						Metakey: "get-state-metakey",
-						Value:   []byte("get-private-metadata-response"),
-					}},
-				})
-				Expect(err).NotTo(HaveOccurred())
-				expectedResponse.Payload = responsePayload
-			})
-
-			It("calls GetPrivateDataMetadata on the transaction simulator", func() {
-				_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-				Expect(err).NotTo(HaveOccurred())
-
-				Expect(fakeTxSimulator.GetPrivateDataMetadataCallCount()).To(Equal(1))
-				ccname, collection, key := fakeTxSimulator.GetPrivateDataMetadataArgsForCall(0)
-				Expect(ccname).To(Equal("cc-instance-name"))
-				Expect(collection).To(Equal("collection-name"))
-				Expect(key).To(Equal("get-state-key"))
-			})
-
-			It("returns the response message from GetPrivateDataMetadata", func() {
-				resp, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp).To(Equal(expectedResponse))
-			})
-
-			Context("and GetPrivateDataMetadata fails due to ledger error", func() {
-				BeforeEach(func() {
-					fakeTxSimulator.GetPrivateDataMetadataReturns(nil, errors.New("french fries"))
-				})
-
-				It("returns the error from GetPrivateDataMetadata", func() {
-					_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-					Expect(err).To(MatchError("french fries"))
-				})
-			})
-
-			Context("and GetPrivateDataMetadata fails due to no read access", func() {
-				BeforeEach(func() {
-					fakeCollectionStore.HasReadAccessReturns(false, nil)
-				})
-
-				It("returns the error from GetPrivateDataMetadata", func() {
-					_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-					Expect(err).To(MatchError("tx creator does not have read access" +
-						" permission on privatedata in chaincodeName:cc-instance-name" +
-						" collectionName: collection-name"))
-				})
-			})
-
-			Context("and GetPrivateDataMetadata fails due to error in checking the read access", func() {
-				BeforeEach(func() {
-					fakeCollectionStore.HasReadAccessReturns(false, errors.New("no collection config"))
-				})
-
-				It("returns the error from GetPrivateDataMetadata", func() {
-					_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-					Expect(err).To(MatchError("no collection config"))
-				})
-			})
-
-			Context("and GetPrivateDataMetadata fails due to Init transaction", func() {
-				BeforeEach(func() {
-					txContext.IsInitTransaction = true
-				})
-
-				It("returns the error from errorIfInitTransaction", func() {
-					_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-					Expect(err).To(MatchError("private data APIs are not allowed in chaincode Init()"))
-				})
-			})
-		})
-
-		Context("when collection is not set", func() {
-			BeforeEach(func() {
-				metadata := map[string][]byte{
-					"get-state-metakey": []byte("get-state-metadata-response"),
-				}
-				fakeTxSimulator.GetStateMetadataReturns(metadata, nil)
-				responsePayload, err := proto.Marshal(&pb.StateMetadataResult{
-					Entries: []*pb.StateMetadata{{
-						Metakey: "get-state-metakey",
-						Value:   []byte("get-state-metadata-response"),
-					}},
-				})
-				Expect(err).NotTo(HaveOccurred())
-				expectedResponse.Payload = responsePayload
-			})
-
-			It("calls GetStateMetadata on the transaction simulator", func() {
-				_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-				Expect(err).NotTo(HaveOccurred())
-
-				Expect(fakeTxSimulator.GetStateMetadataCallCount()).To(Equal(1))
-				ccname, key := fakeTxSimulator.GetStateMetadataArgsForCall(0)
-				Expect(ccname).To(Equal("cc-instance-name"))
-				Expect(key).To(Equal("get-state-key"))
-			})
-
-			It("returns the response from GetStateMetadata", func() {
-				resp, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(resp).To(Equal(expectedResponse))
-			})
-
-			Context("and GetStateMetadata fails", func() {
-				BeforeEach(func() {
-					fakeTxSimulator.GetStateMetadataReturns(nil, errors.New("tomato"))
-				})
-
-				It("returns the error from GetStateMetadata", func() {
-					_, err := handler.HandleGetStateMetadata(incomingMessage, txContext)
-					Expect(err).To(MatchError("tomato"))
-				})
-			})
-		})
-	})
-
 	Describe("HandleGetStateByRange", func() {
 		var (
 			incomingMessage       *pb.ChaincodeMessage
 			request               *pb.GetStateByRange
 			expectedResponse      *pb.ChaincodeMessage
-			fakeIterator          *mock.QueryResultsIterator
+			fakeIterator          *mock.ResultsIterator
 			expectedQueryResponse *pb.QueryResponse
 			expectedPayload       []byte
 		)
@@ -1272,7 +725,7 @@ var _ = Describe("Handler", func() {
 				ChannelId: "channel-id",
 			}
 
-			fakeIterator = &mock.QueryResultsIterator{}
+			fakeIterator = &mock.ResultsIterator{}
 			fakeTxSimulator.GetStateRangeScanIteratorReturns(fakeIterator, nil)
 
 			expectedQueryResponse = &pb.QueryResponse{
@@ -1301,8 +754,6 @@ var _ = Describe("Handler", func() {
 			Expect(pqr).To(Equal(&chaincode.PendingQueryResult{}))
 			iter := txContext.GetQueryIterator("generated-query-id")
 			Expect(iter).To(Equal(fakeIterator))
-			retCount := txContext.GetTotalReturnCount("generated-query-id")
-			Expect(*retCount).To(Equal(int32(0)))
 		})
 
 		It("returns the response message", func() {
@@ -1348,7 +799,6 @@ var _ = Describe("Handler", func() {
 				Expect(err).NotTo(HaveOccurred())
 				incomingMessage.Payload = payload
 
-				fakeCollectionStore.HasReadAccessReturns(true, nil)
 				fakeTxSimulator.GetPrivateDataRangeScanIteratorReturns(fakeIterator, nil)
 			})
 
@@ -1364,7 +814,7 @@ var _ = Describe("Handler", func() {
 				Expect(endKey).To(Equal("get-state-end-key"))
 			})
 
-			Context("and GetPrivateDataRangeScanIterator fails due to ledger error", func() {
+			Context("and GetPrivateDataRangeScanIterator fails", func() {
 				BeforeEach(func() {
 					fakeTxSimulator.GetPrivateDataRangeScanIteratorReturns(nil, errors.New("french fries"))
 				})
@@ -1372,41 +822,6 @@ var _ = Describe("Handler", func() {
 				It("returns the error from GetPrivateDataRangeScanIterator", func() {
 					_, err := handler.HandleGetStateByRange(incomingMessage, txContext)
 					Expect(err).To(MatchError("french fries"))
-				})
-			})
-
-			Context("and GetPrivateDataRangeScanIterator fails due to no read access", func() {
-				BeforeEach(func() {
-					fakeCollectionStore.HasReadAccessReturns(false, nil)
-				})
-
-				It("returns the error from GetPrivateDataRangeScanIterator", func() {
-					_, err := handler.HandleGetStateByRange(incomingMessage, txContext)
-					Expect(err).To(MatchError("tx creator does not have read access" +
-						" permission on privatedata in chaincodeName:cc-instance-name" +
-						" collectionName: collection-name"))
-				})
-			})
-
-			Context("and GetPrivateDataRangeScanIterator fails due to error in checking the read access", func() {
-				BeforeEach(func() {
-					fakeCollectionStore.HasReadAccessReturns(false, errors.New("no collection config"))
-				})
-
-				It("returns the error from GetPrivateDataRangeScanIterator", func() {
-					_, err := handler.HandleGetStateByRange(incomingMessage, txContext)
-					Expect(err).To(MatchError("no collection config"))
-				})
-			})
-
-			Context("and GetPrivateDataRangeScanIterator fails due to Init transaction", func() {
-				BeforeEach(func() {
-					txContext.IsInitTransaction = true
-				})
-
-				It("returns the error from errorIfInitTransaction", func() {
-					_, err := handler.HandleGetStateByRange(incomingMessage, txContext)
-					Expect(err).To(MatchError("private data APIs are not allowed in chaincode Init()"))
 				})
 			})
 		})
@@ -1418,7 +833,7 @@ var _ = Describe("Handler", func() {
 
 			It("returns an error", func() {
 				_, err := handler.HandleGetStateByRange(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
+				Expect(err).To(MatchError("unmarshal failed: proto: peer.GetStateByRange: wiretype end group for non-group"))
 			})
 		})
 
@@ -1459,15 +874,13 @@ var _ = Describe("Handler", func() {
 				Expect(pqr).To(BeNil())
 				iter := txContext.GetQueryIterator("generated-query-id")
 				Expect(iter).To(BeNil())
-				retCount := txContext.GetTotalReturnCount("generated-query-id")
-				Expect(retCount).To(BeNil())
 			})
 		})
 	})
 
 	Describe("HandleQueryStateNext", func() {
 		var (
-			fakeIterator          *mock.QueryResultsIterator
+			fakeIterator          *mock.ResultsIterator
 			expectedQueryResponse *pb.QueryResponse
 			request               *pb.QueryStateNext
 			incomingMessage       *pb.ChaincodeMessage
@@ -1480,7 +893,7 @@ var _ = Describe("Handler", func() {
 			payload, err := proto.Marshal(request)
 			Expect(err).NotTo(HaveOccurred())
 
-			fakeIterator = &mock.QueryResultsIterator{}
+			fakeIterator = &mock.ResultsIterator{}
 			txContext.InitializeQueryContext("query-state-next-id", fakeIterator)
 
 			incomingMessage = &pb.ChaincodeMessage{
@@ -1502,7 +915,7 @@ var _ = Describe("Handler", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(fakeQueryResponseBuilder.BuildQueryResponseCallCount()).To(Equal(1))
-			tctx, iter, id, _, _ := fakeQueryResponseBuilder.BuildQueryResponseArgsForCall(0)
+			tctx, iter, id := fakeQueryResponseBuilder.BuildQueryResponseArgsForCall(0)
 			Expect(tctx).To(Equal(txContext))
 			Expect(iter).To(Equal(fakeIterator))
 			Expect(id).To(Equal("query-state-next-id"))
@@ -1530,7 +943,7 @@ var _ = Describe("Handler", func() {
 
 			It("returns an error", func() {
 				_, err := handler.HandleQueryStateNext(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
+				Expect(err).To(MatchError("unmarshal failed: proto: peer.QueryStateNext: wiretype end group for non-group"))
 			})
 		})
 
@@ -1562,8 +975,6 @@ var _ = Describe("Handler", func() {
 				Expect(pqr).To(BeNil())
 				iter := txContext.GetQueryIterator("generated-query-id")
 				Expect(iter).To(BeNil())
-				retCount := txContext.GetTotalReturnCount("generated-query-id")
-				Expect(retCount).To(BeNil())
 			})
 		})
 
@@ -1584,15 +995,13 @@ var _ = Describe("Handler", func() {
 				Expect(pqr).To(BeNil())
 				iter := txContext.GetQueryIterator("generated-query-id")
 				Expect(iter).To(BeNil())
-				retCount := txContext.GetTotalReturnCount("generated-query-id")
-				Expect(retCount).To(BeNil())
 			})
 		})
 	})
 
 	Describe("HandleQueryStateClose", func() {
 		var (
-			fakeIterator          *mock.QueryResultsIterator
+			fakeIterator          *mock.ResultsIterator
 			expectedQueryResponse *pb.QueryResponse
 			request               *pb.QueryStateClose
 			incomingMessage       *pb.ChaincodeMessage
@@ -1605,7 +1014,7 @@ var _ = Describe("Handler", func() {
 			payload, err := proto.Marshal(request)
 			Expect(err).NotTo(HaveOccurred())
 
-			fakeIterator = &mock.QueryResultsIterator{}
+			fakeIterator = &mock.ResultsIterator{}
 			txContext.InitializeQueryContext("query-state-close-id", fakeIterator)
 
 			incomingMessage = &pb.ChaincodeMessage{
@@ -1641,7 +1050,7 @@ var _ = Describe("Handler", func() {
 
 			It("returns an error", func() {
 				_, err := handler.HandleQueryStateClose(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
+				Expect(err).To(MatchError("unmarshal failed: proto: peer.QueryStateClose: wiretype end group for non-group"))
 			})
 		})
 
@@ -1662,7 +1071,7 @@ var _ = Describe("Handler", func() {
 			request               *pb.GetQueryResult
 			incomingMessage       *pb.ChaincodeMessage
 			expectedQueryResponse *pb.QueryResponse
-			fakeIterator          *mock.QueryResultsIterator
+			fakeIterator          *mock.ResultsIterator
 		)
 
 		BeforeEach(func() {
@@ -1684,7 +1093,7 @@ var _ = Describe("Handler", func() {
 			}
 			fakeQueryResponseBuilder.BuildQueryResponseReturns(expectedQueryResponse, nil)
 
-			fakeIterator = &mock.QueryResultsIterator{}
+			fakeIterator = &mock.ResultsIterator{}
 			fakeTxSimulator.ExecuteQueryReturns(fakeIterator, nil)
 		})
 
@@ -1718,7 +1127,6 @@ var _ = Describe("Handler", func() {
 				Expect(err).NotTo(HaveOccurred())
 				incomingMessage.Payload = payload
 
-				fakeCollectionStore.HasReadAccessReturns(true, nil)
 				fakeTxSimulator.ExecuteQueryOnPrivateDataReturns(fakeIterator, nil)
 			})
 
@@ -1741,11 +1149,9 @@ var _ = Describe("Handler", func() {
 				Expect(pqr).To(Equal(&chaincode.PendingQueryResult{}))
 				iter := txContext.GetQueryIterator("generated-query-id")
 				Expect(iter).To(Equal(fakeIterator))
-				retCount := txContext.GetTotalReturnCount("generated-query-id")
-				Expect(*retCount).To(Equal(int32(0)))
 			})
 
-			Context("and ExecuteQueryOnPrivateData fails due to ledger error", func() {
+			Context("and ExecuteQueryOnPrivateData fails", func() {
 				BeforeEach(func() {
 					fakeTxSimulator.ExecuteQueryOnPrivateDataReturns(nil, errors.New("pizza"))
 				})
@@ -1755,41 +1161,6 @@ var _ = Describe("Handler", func() {
 					Expect(err).To(MatchError("pizza"))
 				})
 			})
-
-			Context("and ExecuteQueryOnPrivateData fails due to no read access", func() {
-				BeforeEach(func() {
-					fakeCollectionStore.HasReadAccessReturns(false, nil)
-				})
-
-				It("returns the error", func() {
-					_, err := handler.HandleGetQueryResult(incomingMessage, txContext)
-					Expect(err).To(MatchError("tx creator does not have read access" +
-						" permission on privatedata in chaincodeName:cc-instance-name" +
-						" collectionName: collection-name"))
-				})
-			})
-
-			Context("and ExecuteQueryOnPrivateData fails due to error in checking the read access", func() {
-				BeforeEach(func() {
-					fakeCollectionStore.HasReadAccessReturns(false, errors.New("no collection config"))
-				})
-
-				It("returns the error", func() {
-					_, err := handler.HandleGetQueryResult(incomingMessage, txContext)
-					Expect(err).To(MatchError("no collection config"))
-				})
-			})
-
-			Context("and ExecuteQueryOnPrivateData fails due to Init transaction", func() {
-				BeforeEach(func() {
-					txContext.IsInitTransaction = true
-				})
-
-				It("returns the error from errorIfInitTransaction", func() {
-					_, err := handler.HandleGetQueryResult(incomingMessage, txContext)
-					Expect(err).To(MatchError("private data APIs are not allowed in chaincode Init()"))
-				})
-			})
 		})
 
 		It("builds the query response", func() {
@@ -1797,7 +1168,7 @@ var _ = Describe("Handler", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(fakeQueryResponseBuilder.BuildQueryResponseCallCount()).To(Equal(1))
-			tctx, iter, iterID, _, _ := fakeQueryResponseBuilder.BuildQueryResponseArgsForCall(0)
+			tctx, iter, iterID := fakeQueryResponseBuilder.BuildQueryResponseArgsForCall(0)
 			Expect(tctx).To(Equal(txContext))
 			Expect(iter).To(Equal(fakeIterator))
 			Expect(iterID).To(Equal("generated-query-id"))
@@ -1820,8 +1191,6 @@ var _ = Describe("Handler", func() {
 				Expect(pqr).To(BeNil())
 				iter := txContext.GetQueryIterator("generated-query-id")
 				Expect(iter).To(BeNil())
-				retCount := txContext.GetTotalReturnCount("generated-query-id")
-				Expect(retCount).To(BeNil())
 			})
 		})
 
@@ -1832,7 +1201,7 @@ var _ = Describe("Handler", func() {
 
 			It("returns an error", func() {
 				_, err := handler.HandleGetQueryResult(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
+				Expect(err).To(MatchError("unmarshal failed: proto: peer.GetQueryResult: wiretype end group for non-group"))
 			})
 		})
 
@@ -1853,8 +1222,6 @@ var _ = Describe("Handler", func() {
 				Expect(pqr).To(BeNil())
 				iter := txContext.GetQueryIterator("generated-query-id")
 				Expect(iter).To(BeNil())
-				retCount := txContext.GetTotalReturnCount("generated-query-id")
-				Expect(retCount).To(BeNil())
 			})
 		})
 	})
@@ -1864,7 +1231,7 @@ var _ = Describe("Handler", func() {
 			request               *pb.GetHistoryForKey
 			incomingMessage       *pb.ChaincodeMessage
 			expectedQueryResponse *pb.QueryResponse
-			fakeIterator          *mock.QueryResultsIterator
+			fakeIterator          *mock.ResultsIterator
 		)
 
 		BeforeEach(func() {
@@ -1886,7 +1253,7 @@ var _ = Describe("Handler", func() {
 			}
 			fakeQueryResponseBuilder.BuildQueryResponseReturns(expectedQueryResponse, nil)
 
-			fakeIterator = &mock.QueryResultsIterator{}
+			fakeIterator = &mock.ResultsIterator{}
 			fakeHistoryQueryExecutor.GetHistoryForKeyReturns(fakeIterator, nil)
 		})
 
@@ -1908,8 +1275,6 @@ var _ = Describe("Handler", func() {
 			Expect(pqr).To(Equal(&chaincode.PendingQueryResult{}))
 			iter := txContext.GetQueryIterator("generated-query-id")
 			Expect(iter).To(Equal(fakeIterator))
-			retCount := txContext.GetTotalReturnCount("generated-query-id")
-			Expect(*retCount).To(Equal(int32(0)))
 		})
 
 		It("builds a query response", func() {
@@ -1917,7 +1282,7 @@ var _ = Describe("Handler", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(fakeQueryResponseBuilder.BuildQueryResponseCallCount()).To(Equal(1))
-			tctx, iter, iterID, _, _ := fakeQueryResponseBuilder.BuildQueryResponseArgsForCall(0)
+			tctx, iter, iterID := fakeQueryResponseBuilder.BuildQueryResponseArgsForCall(0)
 			Expect(tctx).To(Equal(txContext))
 			Expect(iter).To(Equal(fakeIterator))
 			Expect(iterID).To(Equal("generated-query-id"))
@@ -1930,7 +1295,7 @@ var _ = Describe("Handler", func() {
 
 			It("returns an error", func() {
 				_, err := handler.HandleGetHistoryForKey(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
+				Expect(err).To(MatchError("unmarshal failed: proto: peer.GetHistoryForKey: wiretype end group for non-group"))
 			})
 		})
 
@@ -1962,8 +1327,6 @@ var _ = Describe("Handler", func() {
 				Expect(pqr).To(BeNil())
 				iter := txContext.GetQueryIterator("generated-query-id")
 				Expect(iter).To(BeNil())
-				retCount := txContext.GetTotalReturnCount("generated-query-id")
-				Expect(retCount).To(BeNil())
 			})
 		})
 
@@ -1984,8 +1347,6 @@ var _ = Describe("Handler", func() {
 				Expect(pqr).To(BeNil())
 				iter := txContext.GetQueryIterator("generated-query-id")
 				Expect(iter).To(BeNil())
-				retCount := txContext.GetTotalReturnCount("generated-query-id")
-				Expect(retCount).To(BeNil())
 			})
 		})
 	})
@@ -2026,7 +1387,7 @@ var _ = Describe("Handler", func() {
 				Name:    "target-chaincode-data-name",
 				Version: "target-chaincode-version",
 			}
-			fakeDefinitionGetter.ChaincodeDefinitionReturns(targetDefinition, nil)
+			fakeDefinitionGetter.GetChaincodeDefinitionReturns(targetDefinition, nil)
 
 			request = &pb.ChaincodeSpec{
 				ChaincodeId: &pb.ChaincodeID{
@@ -2122,8 +1483,9 @@ var _ = Describe("Handler", func() {
 				Expect(err).NotTo(HaveOccurred())
 
 				Expect(fakeInvoker.InvokeCallCount()).To(Equal(1))
-				txParams, _, _ := fakeInvoker.InvokeArgsForCall(0)
-				Expect(txParams.TXSimulator).To(BeIdenticalTo(newTxSimulator)) // same instance, not just equal
+				ctx, _, _ := fakeInvoker.InvokeArgsForCall(0)
+				sim := ctx.Value(chaincode.TXSimulatorKey)
+				Expect(sim).To(BeIdenticalTo(newTxSimulator)) // same instance, not just equal
 			})
 
 			It("creates a new history query executor for target execution", func() {
@@ -2138,12 +1500,13 @@ var _ = Describe("Handler", func() {
 				Expect(err).NotTo(HaveOccurred())
 
 				Expect(fakeInvoker.InvokeCallCount()).To(Equal(1))
-				txParams, _, _ := fakeInvoker.InvokeArgsForCall(0)
-				Expect(txParams.HistoryQueryExecutor).To(BeIdenticalTo(newHistoryQueryExecutor)) // same instance, not just equal
+				ctx, _, _ := fakeInvoker.InvokeArgsForCall(0)
+				hqe := ctx.Value(chaincode.HistoryQueryExecutorKey)
+				Expect(hqe).To(BeIdenticalTo(newHistoryQueryExecutor)) // same instance, not just equal
 			})
 
 			It("marks the new transaction simulator as done after execute", func() {
-				fakeInvoker.InvokeStub = func(*ccprovider.TransactionParams, *ccprovider.CCContext, *pb.ChaincodeInput) (*pb.ChaincodeMessage, error) {
+				fakeInvoker.InvokeStub = func(context.Context, *ccprovider.CCContext, ccprovider.ChaincodeSpecGetter) (*pb.ChaincodeMessage, error) {
 					Expect(newTxSimulator.DoneCallCount()).To(Equal(0))
 					return responseMessage, nil
 				}
@@ -2219,10 +1582,13 @@ var _ = Describe("Handler", func() {
 				_, err := handler.HandleInvokeChaincode(incomingMessage, txContext)
 				Expect(err).NotTo(HaveOccurred())
 
-				Expect(fakeDefinitionGetter.ChaincodeDefinitionCallCount()).To(Equal(1))
-				ccname, txSim := fakeDefinitionGetter.ChaincodeDefinitionArgsForCall(0)
+				Expect(fakeDefinitionGetter.GetChaincodeDefinitionCallCount()).To(Equal(1))
+				_, txid, signedProp, prop, chainID, ccname := fakeDefinitionGetter.GetChaincodeDefinitionArgsForCall(0)
+				Expect(txid).To(Equal("tx-id"))
+				Expect(signedProp).To(Equal(expectedSignedProp))
+				Expect(prop).To(Equal(expectedProposal))
+				Expect(chainID).To(Equal("channel-id"))
 				Expect(ccname).To(Equal("target-chaincode-name"))
-				Expect(txSim).To(Equal(newTxSimulator))
 			})
 
 			It("checks the instantiation policy on the target", func() {
@@ -2238,7 +1604,7 @@ var _ = Describe("Handler", func() {
 
 			Context("when getting the chaincode definition fails", func() {
 				BeforeEach(func() {
-					fakeDefinitionGetter.ChaincodeDefinitionReturns(nil, errors.New("blueberry-cobbler"))
+					fakeDefinitionGetter.GetChaincodeDefinitionReturns(nil, errors.New("blueberry-cobbler"))
 				})
 
 				It("returns an error", func() {
@@ -2310,7 +1676,7 @@ var _ = Describe("Handler", func() {
 
 			It("returns an error", func() {
 				_, err := handler.HandleInvokeChaincode(incomingMessage, txContext)
-				Expect(err).To(MatchError("unmarshal failed: proto: can't skip unknown wire type 4"))
+				Expect(err).To(MatchError("unmarshal failed: proto: peer.ChaincodeSpec: wiretype end group for non-group"))
 			})
 		})
 
@@ -2332,7 +1698,6 @@ var _ = Describe("Handler", func() {
 			incomingMessage    *pb.ChaincodeMessage
 			expectedProposal   *pb.Proposal
 			expectedSignedProp *pb.SignedProposal
-			txParams           *ccprovider.TransactionParams
 		)
 
 		BeforeEach(func() {
@@ -2352,31 +1717,26 @@ var _ = Describe("Handler", func() {
 				Signature:     []byte("signature"),
 			}
 
-			cccid = &ccprovider.CCContext{
-				Name:    "chaincode-name",
-				Version: "chaincode-version",
-			}
+			cccid = ccprovider.NewCCContext("channel-name", "chaincode-name", "chaincode-version", "tx-id", false, expectedSignedProp, expectedProposal)
 			incomingMessage = &pb.ChaincodeMessage{
 				Type:      pb.ChaincodeMessage_TRANSACTION,
 				Txid:      "tx-id",
 				Payload:   payload,
 				ChannelId: "channel-id",
 			}
-
-			txParams = &ccprovider.TransactionParams{
-				TxID:       "tx-id",
-				ChannelID:  "channel-id",
-				SignedProp: expectedSignedProp,
-				Proposal:   expectedProposal,
-			}
 		})
 
 		It("creates transaction context", func() {
 			close(responseNotifier)
-			handler.Execute(txParams, cccid, incomingMessage, time.Second)
+			handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 
 			Expect(fakeContextRegistry.CreateCallCount()).To(Equal(1))
-			Expect(fakeContextRegistry.CreateArgsForCall(0)).To(Equal(txParams))
+			ctxt, chainID, txid, signedProp, prop := fakeContextRegistry.CreateArgsForCall(0)
+			Expect(ctxt).To(Equal(context.Background()))
+			Expect(chainID).To(Equal("channel-id"))
+			Expect(txid).To(Equal("tx-id"))
+			Expect(signedProp).To(Equal(expectedSignedProp))
+			Expect(prop).To(Equal(expectedProposal))
 		})
 
 		It("sends an execute message to the chaincode with the correct proposal", func() {
@@ -2384,7 +1744,7 @@ var _ = Describe("Handler", func() {
 			expectedMessage.Proposal = expectedSignedProp
 
 			close(responseNotifier)
-			handler.Execute(txParams, cccid, incomingMessage, time.Second)
+			handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 
 			Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
 			Consistently(fakeChatStream.SendCallCount).Should(Equal(1))
@@ -2396,7 +1756,7 @@ var _ = Describe("Handler", func() {
 		It("waits for the chaincode to respond", func() {
 			doneCh := make(chan struct{})
 			go func() {
-				handler.Execute(txParams, cccid, incomingMessage, time.Second)
+				handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 				close(doneCh)
 			}()
 
@@ -2411,14 +1771,14 @@ var _ = Describe("Handler", func() {
 		It("returns the chaincode response", func() {
 			Eventually(responseNotifier).Should(BeSent(&pb.ChaincodeMessage{Txid: "a-transaction-id"}))
 
-			resp, err := handler.Execute(txParams, cccid, incomingMessage, time.Second)
+			resp, err := handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resp).To(Equal(&pb.ChaincodeMessage{Txid: "a-transaction-id"}))
 		})
 
 		It("deletes the transaction context", func() {
 			close(responseNotifier)
-			handler.Execute(txParams, cccid, incomingMessage, time.Second)
+			handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 
 			Expect(fakeContextRegistry.DeleteCallCount()).Should(Equal(1))
 			channelID, txid := fakeContextRegistry.DeleteArgsForCall(0)
@@ -2435,7 +1795,7 @@ var _ = Describe("Handler", func() {
 				respCh := make(chan *pb.ChaincodeMessage, 1)
 				go func() {
 					defer GinkgoRecover()
-					resp, err := handler.Execute(txParams, cccid, incomingMessage, time.Second)
+					resp, err := handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 					Expect(err).NotTo(HaveOccurred())
 					Eventually(respCh).Should(BeSent(resp))
 				}()
@@ -2451,12 +1811,12 @@ var _ = Describe("Handler", func() {
 
 		Context("when the proposal is missing", func() {
 			BeforeEach(func() {
-				txParams.Proposal = nil
+				cccid = ccprovider.NewCCContext("channel-name", "chaincode-name", "chaincode-version", "tx-id", false, expectedSignedProp, nil)
 			})
 
 			It("sends a nil proposal", func() {
 				close(responseNotifier)
-				_, err := handler.Execute(txParams, cccid, incomingMessage, time.Second)
+				_, err := handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 				Expect(err).NotTo(HaveOccurred())
 
 				Eventually(fakeChatStream.SendCallCount).Should(Equal(1))
@@ -2468,19 +1828,19 @@ var _ = Describe("Handler", func() {
 
 		Context("when the signed proposal is missing", func() {
 			BeforeEach(func() {
-				txParams.SignedProp = nil
+				cccid = ccprovider.NewCCContext("channel-name", "chaincode-name", "chaincode-version", "tx-id", false, nil, expectedProposal)
 			})
 
 			It("returns an error", func() {
 				close(responseNotifier)
-				_, err := handler.Execute(txParams, cccid, incomingMessage, time.Second)
+				_, err := handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 
 				Expect(err).To(MatchError("failed getting proposal context. Signed proposal is nil"))
 			})
 
 			It("deletes the transaction context", func() {
 				close(responseNotifier)
-				handler.Execute(txParams, cccid, incomingMessage, time.Second)
+				handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 
 				Expect(fakeContextRegistry.DeleteCallCount()).Should(Equal(1))
 				channelID, txid := fakeContextRegistry.DeleteArgsForCall(0)
@@ -2495,12 +1855,12 @@ var _ = Describe("Handler", func() {
 			})
 
 			It("returns an error", func() {
-				_, err := handler.Execute(txParams, cccid, incomingMessage, time.Second)
+				_, err := handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 				Expect(err).To(MatchError("burger"))
 			})
 
 			It("does not try to delete the tranasction context", func() {
-				handler.Execute(txParams, cccid, incomingMessage, time.Second)
+				handler.Execute(context.Background(), cccid, incomingMessage, time.Second)
 				Expect(fakeContextRegistry.CreateCallCount()).To(Equal(1))
 				Expect(fakeContextRegistry.DeleteCallCount()).To(Equal(0))
 			})
@@ -2510,30 +1870,14 @@ var _ = Describe("Handler", func() {
 			It("returns an error", func() {
 				errCh := make(chan error, 1)
 				go func() {
-					_, err := handler.Execute(txParams, cccid, incomingMessage, time.Millisecond)
+					_, err := handler.Execute(context.Background(), cccid, incomingMessage, time.Millisecond)
 					errCh <- err
 				}()
 				Eventually(errCh).Should(Receive(MatchError("timeout expired while executing transaction")))
-			})
-
-			It("records execute timeouts", func() {
-				errCh := make(chan error, 1)
-				go func() {
-					_, err := handler.Execute(txParams, cccid, incomingMessage, time.Millisecond)
-					errCh <- err
-				}()
-				Eventually(errCh).Should(Receive(MatchError("timeout expired while executing transaction")))
-				Expect(fakeExecuteTimeouts.WithCallCount()).To(Equal(1))
-				labelValues := fakeExecuteTimeouts.WithArgsForCall(0)
-				Expect(labelValues).To(Equal([]string{
-					"chaincode", "chaincode-name:chaincode-version",
-				}))
-				Expect(fakeExecuteTimeouts.AddCallCount()).To(Equal(1))
-				Expect(fakeExecuteTimeouts.AddArgsForCall(0)).To(BeNumerically("~", 1.0))
 			})
 
 			It("deletes the transaction context", func() {
-				handler.Execute(txParams, cccid, incomingMessage, time.Millisecond)
+				handler.Execute(context.Background(), cccid, incomingMessage, time.Millisecond)
 
 				Expect(fakeContextRegistry.DeleteCallCount()).Should(Equal(1))
 				channelID, txid := fakeContextRegistry.DeleteArgsForCall(0)
@@ -2792,8 +2136,10 @@ var _ = Describe("Handler", func() {
 
 		Context("when an async error is sent", func() {
 			var (
-				cccid           *ccprovider.CCContext
-				incomingMessage *pb.ChaincodeMessage
+				cccid              *ccprovider.CCContext
+				incomingMessage    *pb.ChaincodeMessage
+				expectedProposal   *pb.Proposal
+				expectedSignedProp *pb.SignedProposal
 
 				recvChan chan *pb.ChaincodeMessage
 			)
@@ -2803,10 +2149,9 @@ var _ = Describe("Handler", func() {
 				payload, err := proto.Marshal(request)
 				Expect(err).NotTo(HaveOccurred())
 
-				cccid = &ccprovider.CCContext{
-					Name:    "chaincode-name",
-					Version: "chaincode-version",
-				}
+				expectedProposal = &pb.Proposal{}
+				expectedSignedProp = &pb.SignedProposal{}
+				cccid = ccprovider.NewCCContext("channel-name", "chaincode-name", "chaincode-version", "tx-id", false, expectedSignedProp, expectedProposal)
 
 				incomingMessage = &pb.ChaincodeMessage{
 					Type:      pb.ChaincodeMessage_TRANSACTION,
@@ -2831,8 +2176,8 @@ var _ = Describe("Handler", func() {
 			It("returns an error", func() {
 				errChan := make(chan error, 1)
 				go func() { errChan <- handler.ProcessStream(fakeChatStream) }()
-				Eventually(fakeChatStream.RecvCallCount).ShouldNot(Equal(0))                               // wait for loop to start
-				handler.Execute(&ccprovider.TransactionParams{}, cccid, incomingMessage, time.Millisecond) // force async error
+				Eventually(fakeChatStream.RecvCallCount).ShouldNot(Equal(0))                    // wait for loop to start
+				handler.Execute(context.Background(), cccid, incomingMessage, time.Millisecond) // force async error
 
 				Eventually(errChan).Should(Receive(MatchError("received error while sending message, ending chaincode support stream: [tx-id] error sending TRANSACTION: candy")))
 			})
@@ -2840,8 +2185,8 @@ var _ = Describe("Handler", func() {
 			It("stops receiving messages", func() {
 				errChan := make(chan error, 1)
 				go func() { errChan <- handler.ProcessStream(fakeChatStream) }()
-				Eventually(fakeChatStream.RecvCallCount).ShouldNot(Equal(0))                               // wait for loop to start
-				handler.Execute(&ccprovider.TransactionParams{}, cccid, incomingMessage, time.Millisecond) // force async error
+				Eventually(fakeChatStream.RecvCallCount).ShouldNot(Equal(0))                    // wait for loop to start
+				handler.Execute(context.Background(), cccid, incomingMessage, time.Millisecond) // force async error
 
 				Eventually(fakeChatStream.RecvCallCount).Should(Equal(1))
 				Consistently(fakeChatStream.RecvCallCount).Should(Equal(1))
@@ -2850,11 +2195,11 @@ var _ = Describe("Handler", func() {
 	})
 
 	Describe("Notify", func() {
-		var fakeIterator *mock.QueryResultsIterator
+		var fakeIterator *mock.ResultsIterator
 		var incomingMessage *pb.ChaincodeMessage
 
 		BeforeEach(func() {
-			fakeIterator = &mock.QueryResultsIterator{}
+			fakeIterator = &mock.ResultsIterator{}
 			incomingMessage = &pb.ChaincodeMessage{
 				Txid:      "tx-id",
 				ChannelId: "channel-id",

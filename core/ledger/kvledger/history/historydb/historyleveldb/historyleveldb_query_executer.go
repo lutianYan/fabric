@@ -1,13 +1,23 @@
 /*
-Copyright IBM Corp. All Rights Reserved.
+Copyright IBM Corp. 2016 All Rights Reserved.
 
-SPDX-License-Identifier: Apache-2.0
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+		 http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 
 package historyleveldb
 
 import (
-	"bytes"
+	"errors"
 
 	commonledger "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
@@ -18,21 +28,26 @@ import (
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/ledger/queryresult"
 	putils "github.com/hyperledger/fabric/protos/utils"
-	"github.com/pkg/errors"
 	"github.com/syndtr/goleveldb/leveldb/iterator"
 )
 
 // LevelHistoryDBQueryExecutor is a query executor against the LevelDB history DB
+//对HistoryDB的检索主要通过HistoryDB提供的一个HistoryDBQueryExecutor对象来实现
 type LevelHistoryDBQueryExecutor struct {
 	historyDB  *historyDB
 	blockStore blkstorage.BlockStore
 }
 
 // GetHistoryForKey implements method in interface `ledger.HistoryQueryExecutor`
+//该接口根据提供的命名空间和写值key，返回一个迭代器historyScanner（内部封装了leveldb数据库的Iterator）
+//迭代器必定涉及起点和终点
+//起点：命名空间ns+compositeKeySep+写值key+compositeKeySep的组合键（compositeKeySep当作分隔符理解即可）
+//终点：命名空间ns+compositeKeySep+写值key+compositeKeySep+0xff的组合键
+//对比起点和止点，止点多了一个0xff,0xff相当于一个字符的极限值，也因此这个范围查询的是所有以命名空间ns+compositeKeySep+写值key+compositekeySep为开头的key值
 func (q *LevelHistoryDBQueryExecutor) GetHistoryForKey(namespace string, key string) (commonledger.ResultsIterator, error) {
 
 	if ledgerconfig.IsHistoryDBEnabled() == false {
-		return nil, errors.New("history database not enabled")
+		return nil, errors.New("History tracking not enabled - historyDatabase is false")
 	}
 
 	var compositeStartKey []byte
@@ -60,53 +75,37 @@ func newHistoryScanner(compositePartialKey []byte, namespace string, key string,
 }
 
 func (scanner *historyScanner) Next() (commonledger.QueryResult, error) {
-	for {
-		if !scanner.dbItr.Next() {
-			return nil, nil
-		}
-		historyKey := scanner.dbItr.Key() // history key is in the form namespace~key~blocknum~trannum
-
-		// SplitCompositeKey(namespace~key~blocknum~trannum, namespace~key~) will return the blocknum~trannum in second position
-		_, blockNumTranNumBytes := historydb.SplitCompositeHistoryKey(historyKey, scanner.compositePartialKey)
-
-		// check that blockNumTranNumBytes does not contain a nil byte (FAB-11244) - except the last byte.
-		// if this contains a nil byte that indicate that its a different key other than the one we are
-		// scanning the history for. However, the last byte can be nil even for the valid key (indicating the transaction numer being zero)
-		// This is because, if 'blockNumTranNumBytes' really is the suffix of the desired key - only possibility of this containing a nil byte
-		// is the last byte when the transaction number in blockNumTranNumBytes is zero).
-		// On the other hand, if 'blockNumTranNumBytes' really is NOT the suffix of the desired key, then this has to be a prefix
-		// of some other key (other than the desired key) and in this case, there has to be at least one nil byte (other than the last byte),
-		// for the 'last' CompositeKeySep in the composite key
-		// Take an example of two keys "key" and "key\x00" in a namespace ns. The entries for these keys will be
-		// of type "ns-\x00-key-\x00-blkNumTranNumBytes" and ns-\x00-key-\x00-\x00-blkNumTranNumBytes respectively.
-		// "-" in above examples are just for readability. Further, when scanning the range
-		// {ns-\x00-key-\x00 - ns-\x00-key-xff} for getting the history for <ns, key>, the entry for the other key
-		// falls in the range and needs to be ignored
-		if bytes.Contains(blockNumTranNumBytes[:len(blockNumTranNumBytes)-1], historydb.CompositeKeySep) {
-			logger.Debugf("Some other key [%#v] found in the range while scanning history for key [%#v]. Skipping...",
-				historyKey, scanner.key)
-			continue
-		}
-		blockNum, bytesConsumed := util.DecodeOrderPreservingVarUint64(blockNumTranNumBytes[0:])
-		tranNum, _ := util.DecodeOrderPreservingVarUint64(blockNumTranNumBytes[bytesConsumed:])
-		logger.Debugf("Found history record for namespace:%s key:%s at blockNumTranNum %v:%v\n",
-			scanner.namespace, scanner.key, blockNum, tranNum)
-
-		// Get the transaction from block storage that is associated with this history record
-		tranEnvelope, err := scanner.blockStore.RetrieveTxByBlockNumTranNum(blockNum, tranNum)
-		if err != nil {
-			return nil, err
-		}
-
-		// Get the txid, key write value, timestamp, and delete indicator associated with this transaction
-		queryResult, err := getKeyModificationFromTran(tranEnvelope, scanner.namespace, scanner.key)
-		if err != nil {
-			return nil, err
-		}
-		logger.Debugf("Found historic key value for namespace:%s key:%s from transaction %s\n",
-			scanner.namespace, scanner.key, queryResult.(*queryresult.KeyModification).TxId)
-		return queryResult, nil
+	//由于HistoryDB不存储value，因此这里leveldb的迭代器dbItr的Next()操作不为获取value，而只是让迭代器向前走异步，同时进行是否还有下一个值的判断
+	if !scanner.dbItr.Next() {
+		return nil, nil
 	}
+	//获取迭代器当前值的key。这也是我们想要获取的内容，这个key就是由：命名空间ns+compositekeySep+写值key+compositeKeySep+block序列号+交易ID组成的组合键
+	historyKey := scanner.dbItr.Key() // history key is in the form namespace~key~blocknum~trannum
+
+	// SplitCompositeKey(namespace~key~blocknum~trannum, namespace~key~) will return the blocknum~trannum in second position
+	_, blockNumTranNumBytes := historydb.SplitCompositeHistoryKey(historyKey, scanner.compositePartialKey)
+	//从组合键中分解处其携带的blockID和交易ID
+	blockNum, bytesConsumed := util.DecodeOrderPreservingVarUint64(blockNumTranNumBytes[0:])
+	tranNum, _ := util.DecodeOrderPreservingVarUint64(blockNumTranNumBytes[bytesConsumed:])
+	logger.Debugf("Found history record for namespace:%s key:%s at blockNumTranNum %v:%v\n",
+		scanner.namespace, scanner.key, blockNum, tranNum)
+
+	// Get the transaction from block storage that is associated with this history record
+	//使用BlockStore，根据blockID和交易ID，获取原始的交易信息
+	tranEnvelope, err := scanner.blockStore.RetrieveTxByBlockNumTranNum(blockNum, tranNum)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the txid, key write value, timestamp, and delete indicator associated with this transaction
+	//根据获取的原始交易信息进行整理，返回当次Next()的单个查询结果，该结果里面包含改动时间、改动值、是否删除等信息
+	queryResult, err := getKeyModificationFromTran(tranEnvelope, scanner.namespace, scanner.key)
+	if err != nil {
+		return nil, err
+	}
+	logger.Debugf("Found historic key value for namespace:%s key:%s from transaction %s\n",
+		scanner.namespace, scanner.key, queryResult.(*queryresult.KeyModification).TxId)
+	return queryResult, nil
 }
 
 func (scanner *historyScanner) Close() {
@@ -159,9 +158,9 @@ func getKeyModificationFromTran(tranEnvelope *common.Envelope, namespace string,
 						Timestamp: timestamp, IsDelete: kvWrite.IsDelete}, nil
 				}
 			} // end keys loop
-			return nil, errors.New("key not found in namespace's writeset")
+			return nil, errors.New("Key not found in namespace's writeset")
 		} // end if
 	} //end namespaces loop
-	return nil, errors.New("namespace not found in transaction's ReadWriteSets")
+	return nil, errors.New("Namespace not found in transaction's ReadWriteSets")
 
 }

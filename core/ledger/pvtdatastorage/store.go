@@ -3,7 +3,8 @@ Copyright IBM Corp. All Rights Reserved.
 
 SPDX-License-Identifier: Apache-2.0
 */
-
+//在联盟链中，不是所有的数据都是共享的，一些私有的信息我们并不想让盟友掌握，所以需要一些私有数据的存储机制
+//该文件函数就是为了提供私有的信息存储机制而存在的
 package pvtdatastorage
 
 import (
@@ -28,6 +29,9 @@ type Provider interface {
 // Finally, one of the functions `Commit` or `Rollback` is invoked on this store based
 // on whether the block was written successfully or not. The store implementation
 // is expected to survive a server crash between the call to `Prepare` and `Commit`/`Rollback`
+//永久存储私有信息的机制，因为私有信息应该与账本中的区块信息同步，所以私有信息需要以原子操作的形式实现。为了实现这种功能，接口store的实现需要提供如commit/roolback的两阶段的提交功能
+//具体的实现：私有数据通过prepare函数提交给Store，然后区块会被附加到区块存储中，最后根据区块是否写入成功，分别调用commit和rollback
+//Store接口的实现应该能够调用Prepare和Commot/Roolback函数之间容忍服务器崩溃
 type Store interface {
 	// Init initializes the store. This function is expected to be invoked before using the store
 	Init(btlPolicy pvtdatapolicy.BTLPolicy)
@@ -43,39 +47,17 @@ type Store interface {
 	// The pvt data is filtered by the list of 'ns/collections' supplied in the filter
 	// A nil filter does not filter any results
 	GetPvtDataByBlockNum(blockNum uint64, filter ledger.PvtNsCollFilter) ([]*ledger.TxPvtData, error)
-	// GetMissingPvtDataInfoForMostRecentBlocks returns the missing private data information for the
-	// most recent `maxBlock` blocks which miss at least a private data of a eligible collection.
-	GetMissingPvtDataInfoForMostRecentBlocks(maxBlock int) (ledger.MissingPvtDataInfo, error)
-	// Prepare prepares the Store for commiting the pvt data and storing both eligible and ineligible
-	// missing private data --- `eligible` denotes that the missing private data belongs to a collection
-	// for which this peer is a member; `ineligible` denotes that the missing private data belong to a
-	// collection for which this peer is not a member.
-	// This call does not commit the pvt data and store missing private data. Subsequently, the caller
-	// is expected to call either `Commit` or `Rollback` function. Return from this should ensure
-	// that enough preparation is done such that `Commit` function invoked afterwards can commit the
-	// data and the store is capable of surviving a crash between this function call and the next
+	// Prepare prepares the Store for commiting the pvt data. This call does not commit the pvt data.
+	// Subsequently, the caller is expected to call either `Commit` or `Rollback` function.
+	// Return from this should ensure that enough preparation is done such that `Commit` function invoked afterwards
+	// can commit the data and the store is capable of surviving a crash between this function call and the next
 	// invoke to the `Commit`
-	Prepare(blockNum uint64, pvtData []*ledger.TxPvtData, missingPvtData ledger.TxMissingPvtDataMap) error
+	//这个调用不提交pvt数据。随后，调用者应该调用`Commit`或`Rollback`函数。从这里返回应该确保做足够的准备工作，以便之后调用的`Commit`函数可以提交数据和store能够在这个函数调用和下一次调用`Commit`之间幸存
+	Prepare(blockNum uint64, pvtData []*ledger.TxPvtData) error
 	// Commit commits the pvt data passed in the previous invoke to the `Prepare` function
 	Commit() error
 	// Rollback rolls back the pvt data passed in the previous invoke to the `Prepare` function
 	Rollback() error
-	// ProcessCollsEligibilityEnabled notifies the store when the peer becomes eligible to recieve data for an
-	// existing collection. Parameter 'committingBlk' refers to the block number that contains the corresponding
-	// collection upgrade transaction and the parameter 'nsCollMap' contains the collections for which the peer
-	// is now eligible to recieve pvt data
-	ProcessCollsEligibilityEnabled(committingBlk uint64, nsCollMap map[string][]string) error
-	// CommitPvtDataOfOldBlocks commits the pvtData (i.e., previously missing data) of old blocks.
-	// The parameter `blocksPvtData` refers a list of old block's pvtdata which are missing in the pvtstore.
-	// This call stores an additional entry called `lastUpdatedOldBlocksList` which keeps the exact list
-	// of updated blocks. This list would be used during recovery process. Once the stateDB is updated with
-	// these pvtData, the `lastUpdatedOldBlocksList` must be removed. During the peer startup,
-	// if the `lastUpdatedOldBlocksList` exists, stateDB needs to be updated with the appropriate pvtData.
-	CommitPvtDataOfOldBlocks(blocksPvtData map[uint64][]*ledger.TxPvtData) error
-	// GetLastUpdatedOldBlocksPvtData returns the pvtdata of blocks listed in `lastUpdatedOldBlocksList`
-	GetLastUpdatedOldBlocksPvtData() (map[uint64][]*ledger.TxPvtData, error)
-	// ResetLastUpdatedOldBlocksList removes the `lastUpdatedOldBlocksList` entry from the store
-	ResetLastUpdatedOldBlocksList() error
 	// IsEmpty returns true if the store does not have any block committed yet
 	IsEmpty() (bool, error)
 	// LastCommittedBlockHeight returns the height of the last committed block

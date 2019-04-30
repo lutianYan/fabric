@@ -174,30 +174,6 @@ func GetServerConfig() (comm.ServerConfig, error) {
 	return serverConfig, nil
 }
 
-// GetServerRootCAs returns the root certificates which will be trusted for
-// gRPC client connections to peers and orderers.
-func GetServerRootCAs() ([][]byte, error) {
-	var rootCAs [][]byte
-	if config.GetPath("peer.tls.rootcert.file") != "" {
-		rootCert, err := ioutil.ReadFile(config.GetPath("peer.tls.rootcert.file"))
-		if err != nil {
-			return nil, fmt.Errorf("error loading TLS root certificate (%s)", err)
-		}
-		rootCAs = append(rootCAs, rootCert)
-	}
-
-	for _, file := range viper.GetStringSlice("peer.tls.serverRootCAs.files") {
-		rootCert, err := ioutil.ReadFile(
-			config.TranslatePath(filepath.Dir(viper.ConfigFileUsed()), file))
-		if err != nil {
-			return nil,
-				fmt.Errorf("error loading server root CAs: %s", err)
-		}
-		rootCAs = append(rootCAs, rootCert)
-	}
-	return rootCAs, nil
-}
-
 // GetClientCertificate returns the TLS certificate to use for gRPC client
 // connections
 func GetClientCertificate() (tls.Certificate, error) {
@@ -218,7 +194,7 @@ func GetClientCertificate() (tls.Certificate, error) {
 	} else {
 		// use the TLS server keypair
 		keyPath = viper.GetString("peer.tls.key.file")
-		certPath = viper.GetString("peer.tls.cert.file")
+		certPath = viper.GetString("peer.tls.key.file")
 
 		if keyPath != "" || certPath != "" {
 			// need both keyPath and certPath to be set

@@ -2,50 +2,50 @@
 package mock
 
 import (
-	sync "sync"
+	"sync"
 
-	ccprovider "github.com/hyperledger/fabric/core/common/ccprovider"
-	peer "github.com/hyperledger/fabric/protos/peer"
+	"github.com/hyperledger/fabric/core/common/ccprovider"
+	pb "github.com/hyperledger/fabric/protos/peer"
+	"golang.org/x/net/context"
 )
 
 type Invoker struct {
-	InvokeStub        func(*ccprovider.TransactionParams, *ccprovider.CCContext, *peer.ChaincodeInput) (*peer.ChaincodeMessage, error)
+	InvokeStub        func(ctxt context.Context, cccid *ccprovider.CCContext, spec ccprovider.ChaincodeSpecGetter) (*pb.ChaincodeMessage, error)
 	invokeMutex       sync.RWMutex
 	invokeArgsForCall []struct {
-		arg1 *ccprovider.TransactionParams
-		arg2 *ccprovider.CCContext
-		arg3 *peer.ChaincodeInput
+		ctxt  context.Context
+		cccid *ccprovider.CCContext
+		spec  ccprovider.ChaincodeSpecGetter
 	}
 	invokeReturns struct {
-		result1 *peer.ChaincodeMessage
+		result1 *pb.ChaincodeMessage
 		result2 error
 	}
 	invokeReturnsOnCall map[int]struct {
-		result1 *peer.ChaincodeMessage
+		result1 *pb.ChaincodeMessage
 		result2 error
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *Invoker) Invoke(arg1 *ccprovider.TransactionParams, arg2 *ccprovider.CCContext, arg3 *peer.ChaincodeInput) (*peer.ChaincodeMessage, error) {
+func (fake *Invoker) Invoke(ctxt context.Context, cccid *ccprovider.CCContext, spec ccprovider.ChaincodeSpecGetter) (*pb.ChaincodeMessage, error) {
 	fake.invokeMutex.Lock()
 	ret, specificReturn := fake.invokeReturnsOnCall[len(fake.invokeArgsForCall)]
 	fake.invokeArgsForCall = append(fake.invokeArgsForCall, struct {
-		arg1 *ccprovider.TransactionParams
-		arg2 *ccprovider.CCContext
-		arg3 *peer.ChaincodeInput
-	}{arg1, arg2, arg3})
-	fake.recordInvocation("Invoke", []interface{}{arg1, arg2, arg3})
+		ctxt  context.Context
+		cccid *ccprovider.CCContext
+		spec  ccprovider.ChaincodeSpecGetter
+	}{ctxt, cccid, spec})
+	fake.recordInvocation("Invoke", []interface{}{ctxt, cccid, spec})
 	fake.invokeMutex.Unlock()
 	if fake.InvokeStub != nil {
-		return fake.InvokeStub(arg1, arg2, arg3)
+		return fake.InvokeStub(ctxt, cccid, spec)
 	}
 	if specificReturn {
 		return ret.result1, ret.result2
 	}
-	fakeReturns := fake.invokeReturns
-	return fakeReturns.result1, fakeReturns.result2
+	return fake.invokeReturns.result1, fake.invokeReturns.result2
 }
 
 func (fake *Invoker) InvokeCallCount() int {
@@ -54,41 +54,30 @@ func (fake *Invoker) InvokeCallCount() int {
 	return len(fake.invokeArgsForCall)
 }
 
-func (fake *Invoker) InvokeCalls(stub func(*ccprovider.TransactionParams, *ccprovider.CCContext, *peer.ChaincodeInput) (*peer.ChaincodeMessage, error)) {
-	fake.invokeMutex.Lock()
-	defer fake.invokeMutex.Unlock()
-	fake.InvokeStub = stub
-}
-
-func (fake *Invoker) InvokeArgsForCall(i int) (*ccprovider.TransactionParams, *ccprovider.CCContext, *peer.ChaincodeInput) {
+func (fake *Invoker) InvokeArgsForCall(i int) (context.Context, *ccprovider.CCContext, ccprovider.ChaincodeSpecGetter) {
 	fake.invokeMutex.RLock()
 	defer fake.invokeMutex.RUnlock()
-	argsForCall := fake.invokeArgsForCall[i]
-	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3
+	return fake.invokeArgsForCall[i].ctxt, fake.invokeArgsForCall[i].cccid, fake.invokeArgsForCall[i].spec
 }
 
-func (fake *Invoker) InvokeReturns(result1 *peer.ChaincodeMessage, result2 error) {
-	fake.invokeMutex.Lock()
-	defer fake.invokeMutex.Unlock()
+func (fake *Invoker) InvokeReturns(result1 *pb.ChaincodeMessage, result2 error) {
 	fake.InvokeStub = nil
 	fake.invokeReturns = struct {
-		result1 *peer.ChaincodeMessage
+		result1 *pb.ChaincodeMessage
 		result2 error
 	}{result1, result2}
 }
 
-func (fake *Invoker) InvokeReturnsOnCall(i int, result1 *peer.ChaincodeMessage, result2 error) {
-	fake.invokeMutex.Lock()
-	defer fake.invokeMutex.Unlock()
+func (fake *Invoker) InvokeReturnsOnCall(i int, result1 *pb.ChaincodeMessage, result2 error) {
 	fake.InvokeStub = nil
 	if fake.invokeReturnsOnCall == nil {
 		fake.invokeReturnsOnCall = make(map[int]struct {
-			result1 *peer.ChaincodeMessage
+			result1 *pb.ChaincodeMessage
 			result2 error
 		})
 	}
 	fake.invokeReturnsOnCall[i] = struct {
-		result1 *peer.ChaincodeMessage
+		result1 *pb.ChaincodeMessage
 		result2 error
 	}{result1, result2}
 }

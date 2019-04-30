@@ -14,8 +14,9 @@
 package main
 
 import (
-	"chaincodes/AutoVendor/directdep"
 	"fmt"
+
+	"chaincodes/AutoVendor/directdep"
 
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	pb "github.com/hyperledger/fabric/protos/peer"

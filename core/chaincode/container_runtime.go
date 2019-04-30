@@ -13,17 +13,19 @@ import (
 	"strings"
 
 	"github.com/hyperledger/fabric/core/chaincode/accesscontrol"
-	"github.com/hyperledger/fabric/core/chaincode/platforms"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/container"
 	"github.com/hyperledger/fabric/core/container/ccintf"
+	"github.com/hyperledger/fabric/core/container/dockercontroller"
+	"github.com/hyperledger/fabric/core/container/inproccontroller"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/pkg/errors"
+	"golang.org/x/net/context"
 )
 
 // Processor processes vm and container requests.
 type Processor interface {
-	Process(vmtype string, req container.VMCReq) error
+	Process(ctxt context.Context, vmtype string, req container.VMCReq) error
 }
 
 // CertGenerator generates client certificates for chaincode.
@@ -35,19 +37,18 @@ type CertGenerator interface {
 
 // ContainerRuntime is responsible for managing containerized chaincode.
 type ContainerRuntime struct {
-	CertGenerator    CertGenerator
-	Processor        Processor
-	CACert           []byte
-	CommonEnv        []string
-	PeerAddress      string
-	PlatformRegistry *platforms.Registry
+	CertGenerator CertGenerator
+	Processor     Processor
+	CACert        []byte
+	CommonEnv     []string
+	PeerAddress   string
 }
 
 // Start launches chaincode in a runtime environment.
-func (c *ContainerRuntime) Start(ccci *ccprovider.ChaincodeContainerInfo, codePackage []byte) error {
-	cname := ccci.Name + ":" + ccci.Version
+func (c *ContainerRuntime) Start(ctxt context.Context, cccid *ccprovider.CCContext, cds *pb.ChaincodeDeploymentSpec) error {
+	cname := cccid.GetCanonicalName()
 
-	lc, err := c.LaunchConfig(cname, ccci.Type)
+	lc, err := c.LaunchConfig(cname, cds.ChaincodeSpec.Type)
 	if err != nil {
 		return err
 	}
@@ -58,23 +59,20 @@ func (c *ContainerRuntime) Start(ccci *ccprovider.ChaincodeContainerInfo, codePa
 
 	scr := container.StartContainerReq{
 		Builder: &container.PlatformBuilder{
-			Type:             ccci.Type,
-			Name:             ccci.Name,
-			Version:          ccci.Version,
-			Path:             ccci.Path,
-			CodePackage:      codePackage,
-			PlatformRegistry: c.PlatformRegistry,
+			DeploymentSpec: cds,
 		},
 		Args:          lc.Args,
 		Env:           lc.Envs,
 		FilesToUpload: lc.Files,
 		CCID: ccintf.CCID{
-			Name:    ccci.Name,
-			Version: ccci.Version,
+			Name:    cds.ChaincodeSpec.ChaincodeId.Name,
+			Version: cccid.Version,
 		},
 	}
 
-	if err := c.Processor.Process(ccci.ContainerType, scr); err != nil {
+	vmtype := getVMType(cds)
+
+	if err := c.Processor.Process(ctxt, vmtype, scr); err != nil {
 		return errors.WithMessage(err, "error starting container")
 	}
 
@@ -82,48 +80,28 @@ func (c *ContainerRuntime) Start(ccci *ccprovider.ChaincodeContainerInfo, codePa
 }
 
 // Stop terminates chaincode and its container runtime environment.
-func (c *ContainerRuntime) Stop(ccci *ccprovider.ChaincodeContainerInfo) error {
+func (c *ContainerRuntime) Stop(ctxt context.Context, cccid *ccprovider.CCContext, cds *pb.ChaincodeDeploymentSpec) error {
 	scr := container.StopContainerReq{
 		CCID: ccintf.CCID{
-			Name:    ccci.Name,
-			Version: ccci.Version,
+			Name:    cds.ChaincodeSpec.ChaincodeId.Name,
+			Version: cccid.Version,
 		},
 		Timeout:    0,
 		Dontremove: false,
 	}
 
-	if err := c.Processor.Process(ccci.ContainerType, scr); err != nil {
+	if err := c.Processor.Process(ctxt, getVMType(cds), scr); err != nil {
 		return errors.WithMessage(err, "error stopping container")
 	}
 
 	return nil
 }
 
-// Wait waits for the container runtime to terminate.
-func (c *ContainerRuntime) Wait(ccci *ccprovider.ChaincodeContainerInfo) (int, error) {
-	type result struct {
-		exitCode int
-		err      error
+func getVMType(cds *pb.ChaincodeDeploymentSpec) string {
+	if cds.ExecEnv == pb.ChaincodeDeploymentSpec_SYSTEM {
+		return inproccontroller.ContainerType
 	}
-
-	resultCh := make(chan result, 1)
-	wcr := container.WaitContainerReq{
-		CCID: ccintf.CCID{
-			Name:    ccci.Name,
-			Version: ccci.Version,
-		},
-		Exited: func(exitCode int, err error) {
-			resultCh <- result{exitCode: exitCode, err: err}
-			close(resultCh)
-		},
-	}
-
-	if err := c.Processor.Process(ccci.ContainerType, wcr); err != nil {
-		return -1, err
-	}
-	r := <-resultCh
-
-	return r.exitCode, r.err
+	return dockercontroller.ContainerType
 }
 
 const (
@@ -153,7 +131,7 @@ type LaunchConfig struct {
 }
 
 // LaunchConfig creates the LaunchConfig for chaincode running in a container.
-func (c *ContainerRuntime) LaunchConfig(cname string, ccType string) (*LaunchConfig, error) {
+func (c *ContainerRuntime) LaunchConfig(cname string, ccType pb.ChaincodeSpec_Type) (*LaunchConfig, error) {
 	var lc LaunchConfig
 
 	// common environment variables
@@ -161,11 +139,11 @@ func (c *ContainerRuntime) LaunchConfig(cname string, ccType string) (*LaunchCon
 
 	// language specific arguments
 	switch ccType {
-	case pb.ChaincodeSpec_GOLANG.String(), pb.ChaincodeSpec_CAR.String():
+	case pb.ChaincodeSpec_GOLANG, pb.ChaincodeSpec_CAR:
 		lc.Args = []string{"chaincode", fmt.Sprintf("-peer.address=%s", c.PeerAddress)}
-	case pb.ChaincodeSpec_JAVA.String():
+	case pb.ChaincodeSpec_JAVA:
 		lc.Args = []string{"/root/chaincode-java/start", "--peerAddress", c.PeerAddress}
-	case pb.ChaincodeSpec_NODE.String():
+	case pb.ChaincodeSpec_NODE:
 		lc.Args = []string{"/bin/sh", "-c", fmt.Sprintf("cd /usr/local/src; npm start -- --peer.address %s", c.PeerAddress)}
 	default:
 		return nil, errors.Errorf("unknown chaincodeType: %s", ccType)

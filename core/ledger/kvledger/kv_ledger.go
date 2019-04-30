@@ -7,8 +7,11 @@ SPDX-License-Identifier: Apache-2.0
 package kvledger
 
 import (
+	"errors"
+	"fmt"
 	"sync"
-	"time"
+
+	"github.com/hyperledger/fabric/core/ledger/pvtdatapolicy"
 
 	"github.com/hyperledger/fabric/common/flogging"
 	commonledger "github.com/hyperledger/fabric/common/ledger"
@@ -23,16 +26,16 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/txmgr/lockbasedtxmgr"
 	"github.com/hyperledger/fabric/core/ledger/ledgerconfig"
 	"github.com/hyperledger/fabric/core/ledger/ledgerstorage"
-	"github.com/hyperledger/fabric/core/ledger/pvtdatapolicy"
 	"github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/peer"
-	"github.com/pkg/errors"
 )
 
 var logger = flogging.MustGetLogger("kvledger")
 
+//kvledger也是ledger，它是对ledeger.peer-ledger的实现，这种实现提供了一种键值数据模型，可以更加方便我们查找需要的信息
 // KVLedger provides an implementation of `ledger.PeerLedger`.
 // This implementation provides a key-value based data model
+//kvLedger是PeerLedger的实现类，由其创建PeerLedgerProvider
 type kvLedger struct {
 	ledgerID               string
 	blockStore             *ledgerstorage.Store
@@ -40,7 +43,6 @@ type kvLedger struct {
 	historyDB              historydb.HistoryDB
 	configHistoryRetriever ledger.ConfigHistoryRetriever
 	blockAPIsRWLock        *sync.RWMutex
-	stats                  *ledgerStats
 }
 
 // NewKVLedger constructs new `KVLedger`
@@ -51,11 +53,10 @@ func newKVLedger(
 	historyDB historydb.HistoryDB,
 	configHistoryMgr confighistory.Mgr,
 	stateListeners []ledger.StateListener,
-	bookkeeperProvider bookkeeping.Provider,
-	ccInfoProvider ledger.DeployedChaincodeInfoProvider,
-	stats *ledgerStats,
-) (*kvLedger, error) {
+	bookkeeperProvider bookkeeping.Provider) (*kvLedger, error) {
+
 	logger.Debugf("Creating KVLedger ledgerID=%s: ", ledgerID)
+	stateListeners = append(stateListeners, configHistoryMgr)
 	// Create a kvLedger for this chain/ledger, which encasulates the underlying
 	// id store, blockstore, txmgr (state database), history database
 	l := &kvLedger{ledgerID: ledgerID, blockStore: blockStore, historyDB: historyDB, blockAPIsRWLock: &sync.RWMutex{}}
@@ -68,31 +69,24 @@ func newKVLedger(
 	if ccEventListener != nil {
 		cceventmgmt.GetMgr().Register(ledgerID, ccEventListener)
 	}
-	btlPolicy := pvtdatapolicy.ConstructBTLPolicy(&collectionInfoRetriever{l, ccInfoProvider})
-	if err := l.initTxMgr(versionedDB, stateListeners, btlPolicy, bookkeeperProvider, ccInfoProvider); err != nil {
+	btlPolicy := pvtdatapolicy.NewBTLPolicy(l)
+	if err := l.initTxMgr(versionedDB, stateListeners, btlPolicy, bookkeeperProvider); err != nil {
 		return nil, err
 	}
 	l.initBlockStore(btlPolicy)
 	//Recover both state DB and history DB if they are out of sync with block storage
+	//来恢复VersionedDB和HistoryDB，HistoryDB在下文详述。
 	if err := l.recoverDBs(); err != nil {
-		panic(errors.WithMessage(err, "error during state DB recovery"))
+		panic(fmt.Errorf(`Error during state DB recovery:%s`, err))
 	}
 	l.configHistoryRetriever = configHistoryMgr.GetRetriever(ledgerID, l)
-
-	info, err := l.GetBlockchainInfo()
-	if err != nil {
-		return nil, err
-	}
-	// initialize stat with the current height
-	stats.updateBlockchainHeight(info.Height)
-	l.stats = stats
 	return l, nil
 }
 
 func (l *kvLedger) initTxMgr(versionedDB privacyenabledstate.DB, stateListeners []ledger.StateListener,
-	btlPolicy pvtdatapolicy.BTLPolicy, bookkeeperProvider bookkeeping.Provider, ccInfoProvider ledger.DeployedChaincodeInfoProvider) error {
+	btlPolicy pvtdatapolicy.BTLPolicy, bookkeeperProvider bookkeeping.Provider) error {
 	var err error
-	l.txtmgmt, err = lockbasedtxmgr.NewLockBasedTxMgr(l.ledgerID, versionedDB, stateListeners, btlPolicy, bookkeeperProvider, ccInfoProvider)
+	l.txtmgmt, err = lockbasedtxmgr.NewLockBasedTxMgr(l.ledgerID, versionedDB, stateListeners, btlPolicy, bookkeeperProvider)
 	return err
 }
 
@@ -104,30 +98,26 @@ func (l *kvLedger) initBlockStore(btlPolicy pvtdatapolicy.BTLPolicy) {
 //by recommitting last valid blocks
 func (l *kvLedger) recoverDBs() error {
 	logger.Debugf("Entering recoverDB()")
-	if err := l.syncStateAndHistoryDBWithBlockstore(); err != nil {
-		return err
-	}
-	if err := l.syncStateDBWithPvtdatastore(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (l *kvLedger) syncStateAndHistoryDBWithBlockstore() error {
 	//If there is no block in blockstorage, nothing to recover.
+	//使用已恢复的BlockStore获取当前已经写入BlockStore的有效的blockID。
 	info, _ := l.blockStore.GetBlockchainInfo()
 	if info.Height == 0 {
 		logger.Debug("Block storage is empty.")
 		return nil
 	}
+	//从BlockStore中获取的最新的有效的blockID
 	lastAvailableBlockNum := info.Height - 1
+	//存放预计需要恢复的账本对象
 	recoverables := []recoverable{l.txtmgmt, l.historyDB}
+	//存放真正需要恢复的账本对象
 	recoverers := []*recoverer{}
 	for _, recoverable := range recoverables {
+		//使用最新有效的lastAvailableBlockNum，检测账本是否需要恢复。
 		recoverFlag, firstBlockNum, err := recoverable.ShouldRecover(lastAvailableBlockNum)
 		if err != nil {
 			return err
 		}
+		//如果recoverFlag为true，则会将VersionedDB账本放入recoverers
 		if recoverFlag {
 			recoverers = append(recoverers, &recoverer{firstBlockNum, recoverable})
 		}
@@ -138,6 +128,8 @@ func (l *kvLedger) syncStateAndHistoryDBWithBlockstore() error {
 	if len(recoverers) == 1 {
 		return l.recommitLostBlocks(recoverers[0].firstBlockNum, lastAvailableBlockNum, recoverers[0].recoverable)
 	}
+	//这里需要说明一下当两个账本的恢复起点不一致时为什么要进行（1）和（2）的操作，又是换位置又是分段恢复的：
+	// 因为block是存储在磁盘文件blockfile中的，因此换位置和分段恢复的操作，可以使得恢复过程中BlockStore读取blockfile中的block数据时顺序读取一次，这样效率更高。
 
 	// both dbs need to be recovered
 	if recoverers[0].firstBlockNum > recoverers[1].firstBlockNum {
@@ -146,56 +138,36 @@ func (l *kvLedger) syncStateAndHistoryDBWithBlockstore() error {
 	}
 	if recoverers[0].firstBlockNum != recoverers[1].firstBlockNum {
 		// bring the lagger db equal to the other db
+		//单独向lagger提交block数据进行恢复
 		if err := l.recommitLostBlocks(recoverers[0].firstBlockNum, recoverers[1].firstBlockNum-1,
 			recoverers[0].recoverable); err != nil {
 			return err
 		}
 	}
 	// get both the db upto block storage
+	//向lagger和VersionedDB两个db中一同提交10-15之间的block数据进行恢复
 	return l.recommitLostBlocks(recoverers[1].firstBlockNum, lastAvailableBlockNum,
 		recoverers[0].recoverable, recoverers[1].recoverable)
 }
 
-func (l *kvLedger) syncStateDBWithPvtdatastore() error {
-	// TODO: So far, the design philosophy was that the scope of block storage is
-	// limited to storing and retrieving blocks data with certain guarantees and statedb is
-	// for the state management. The higher layer, 'kvledger', coordinates the acts between
-	// the two. However, with maintaining the state of the consumption of blocks (i.e,
-	// lastUpdatedOldBlockList for pvtstore reconciliation) within private data block storage
-	// breaks that assumption. The knowledge of what blocks have been consumed for the purpose
-	// of state update should not lie with the source (i.e., pvtdatastorage). A potential fix
-	// is mentioned in FAB-12731
-	blocksPvtData, err := l.blockStore.GetLastUpdatedOldBlocksPvtData()
-	if err != nil {
-		return err
-	}
-	if err := l.txtmgmt.RemoveStaleAndCommitPvtDataOfOldBlocks(blocksPvtData); err != nil {
-		return err
-	}
-	if err := l.blockStore.ResetLastUpdatedOldBlocksList(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 //recommitLostBlocks retrieves blocks in specified range and commit the write set to either
 //state DB or history DB or both
+//传入的参数分别为恢复起点firstBlockNum、恢复终点lastBlockNum、需要恢复的账本recoverables
 func (l *kvLedger) recommitLostBlocks(firstBlockNum uint64, lastBlockNum uint64, recoverables ...recoverable) error {
-	logger.Infof("Recommitting lost blocks - firstBlockNum=%d, lastBlockNum=%d, recoverables=%#v", firstBlockNum, lastBlockNum, recoverables)
 	var err error
 	var blockAndPvtdata *ledger.BlockAndPvtData
 	for blockNumber := firstBlockNum; blockNumber <= lastBlockNum; blockNumber++ {
+		//使用BlockStore从blockfile中获取指定序列号的block
 		if blockAndPvtdata, err = l.GetPvtDataAndBlockByNum(blockNumber, nil); err != nil {
 			return err
 		}
 		for _, r := range recoverables {
+			//向账本提交block
 			if err := r.CommitLostBlock(blockAndPvtdata); err != nil {
 				return err
 			}
 		}
 	}
-	logger.Infof("Recommitted lost blocks - firstBlockNum=%d, lastBlockNum=%d, recoverables=%#v", firstBlockNum, lastBlockNum, recoverables)
 	return nil
 }
 
@@ -268,7 +240,7 @@ func (l *kvLedger) GetTxValidationCodeByTxID(txID string) (peer.TxValidationCode
 
 //Prune prunes the blocks/transactions that satisfy the given policy
 func (l *kvLedger) Prune(policy commonledger.PrunePolicy) error {
-	return errors.New("not yet implemented")
+	return errors.New("Not yet implemented")
 }
 
 // NewTxSimulator returns new `ledger.TxSimulator`
@@ -292,80 +264,50 @@ func (l *kvLedger) NewHistoryQueryExecutor() (ledger.HistoryQueryExecutor, error
 }
 
 // CommitWithPvtData commits the block and the corresponding pvt data in an atomic operation
+//提交block和相应的pvtdata（原子操作）
 func (l *kvLedger) CommitWithPvtData(pvtdataAndBlock *ledger.BlockAndPvtData) error {
 	var err error
 	block := pvtdataAndBlock.Block
 	blockNo := pvtdataAndBlock.Block.Header.Number
 
-	startBlockProcessing := time.Now()
-	logger.Debugf("[%s] Validating state for block [%d]", l.ledgerID, blockNo)
-	txstatsInfo, err := l.txtmgmt.ValidateAndPrepare(pvtdataAndBlock, true)
+	logger.Debugf("Channel [%s]: Validating state for block [%d]", l.ledgerID, blockNo)
+	//验证并准备block数据，为向VersionedDB中写入做准备
+	//使用验证器验证交易的读写集，以确定交易的有效性
+	//若交易有效，则将交易的写集合中的数据放入数据升级包中，为下一步的l.txtmgmt.Commit()提交这批数据做准备
+	//验证并准备block数据，为向VersionedDB中写入数据做准备
+	//注意这里修改 将doMVCCValidation改为false
+	err = l.txtmgmt.ValidateAndPrepare(pvtdataAndBlock, false)
 	if err != nil {
 		return err
 	}
-	elapsedBlockProcessing := time.Since(startBlockProcessing)
 
-	startCommitBlockStorage := time.Now()
-	logger.Debugf("[%s] Committing block [%d] to storage", l.ledgerID, blockNo)
+	logger.Debugf("Channel [%s]: Committing block [%d] to storage", l.ledgerID, blockNo)
+	//加写锁
 	l.blockAPIsRWLock.Lock()
 	defer l.blockAPIsRWLock.Unlock()
+	//向BlockStore账本中写入block。
 	if err = l.blockStore.CommitWithPvtData(pvtdataAndBlock); err != nil {
 		return err
 	}
-	elapsedCommitBlockStorage := time.Since(startCommitBlockStorage)
+	logger.Infof("Channel [%s]: Committed block [%d] with %d transaction(s)", l.ledgerID, block.Header.Number, len(block.Data.Data))
 
-	startCommitState := time.Now()
-	logger.Debugf("[%s] Committing block [%d] transactions to state database", l.ledgerID, blockNo)
+	logger.Debugf("Channel [%s]: Committing block [%d] transactions to state database", l.ledgerID, blockNo)
+	//这里将block数据写入VersionedDB
 	if err = l.txtmgmt.Commit(); err != nil {
-		panic(errors.WithMessage(err, "error during commit to txmgr"))
+		panic(fmt.Errorf(`Error during commit to txmgr:%s`, err))
 	}
-	elapsedCommitState := time.Since(startCommitState)
 
-	// History database could be written in parallel with state and/or async as a future optimization,
-	// although it has not been a bottleneck...no need to clutter the log with elapsed duration.
+	// History database could be written in parallel with state and/or async as a future optimization
+	//可以优化
 	if ledgerconfig.IsHistoryDBEnabled() {
-		logger.Debugf("[%s] Committing block [%d] transactions to history database", l.ledgerID, blockNo)
+		logger.Debugf("Channel [%s]: Committing block [%d] transactions to history database", l.ledgerID, blockNo)
+		//写入historydb
 		if err := l.historyDB.Commit(block); err != nil {
-			panic(errors.WithMessage(err, "Error during commit to history db"))
+			panic(fmt.Errorf(`Error during commit to history db:%s`, err))
 		}
 	}
-
-	elapsedCommitWithPvtData := time.Since(startBlockProcessing)
-
-	logger.Infof("[%s] Committed block [%d] with %d transaction(s) in %dms (state_validation=%dms block_commit=%dms state_commit=%dms)",
-		l.ledgerID, block.Header.Number, len(block.Data.Data),
-		elapsedCommitWithPvtData/time.Millisecond,
-		elapsedBlockProcessing/time.Millisecond,
-		elapsedCommitBlockStorage/time.Millisecond,
-		elapsedCommitState/time.Millisecond,
-	)
-	l.updateBlockStats(blockNo,
-		elapsedBlockProcessing,
-		elapsedCommitBlockStorage,
-		elapsedCommitState,
-		txstatsInfo,
-	)
+	//这里需注意一下，虽说三个账本都是写入block数据，但是写入的数据各有不同，具体写何内容在下文各个账本章节中详述
 	return nil
-}
-
-func (l *kvLedger) updateBlockStats(
-	blockNum uint64,
-	blockProcessingTime time.Duration,
-	blockstorageCommitTime time.Duration,
-	statedbCommitTime time.Duration,
-	txstatsInfo []*txmgr.TxStatInfo,
-) {
-	l.stats.updateBlockchainHeight(blockNum + 1)
-	l.stats.updateBlockProcessingTime(blockProcessingTime)
-	l.stats.updateBlockstorageCommitTime(blockstorageCommitTime)
-	l.stats.updateStatedbCommitTime(statedbCommitTime)
-	l.stats.updateTransactionsStats(txstatsInfo)
-}
-
-// GetMissingPvtDataInfoForMostRecentBlocks returns the missing private data information for the
-// most recent `maxBlock` blocks which miss at least a private data of a eligible collection.
-func (l *kvLedger) GetMissingPvtDataInfoForMostRecentBlocks(maxBlock int) (ledger.MissingPvtDataInfo, error) {
-	return l.blockStore.GetMissingPvtDataInfoForMostRecentBlocks(maxBlock)
 }
 
 // GetPvtDataAndBlockByNum returns the block and the corresponding pvt data.
@@ -390,48 +332,16 @@ func (l *kvLedger) GetPvtDataByNum(blockNum uint64, filter ledger.PvtNsCollFilte
 // a given maxBlockNumToRetain. In other words, Purge only retains private read-write sets
 // that were generated at block height of maxBlockNumToRetain or higher.
 func (l *kvLedger) PurgePrivateData(maxBlockNumToRetain uint64) error {
-	return errors.New("not yet implemented")
+	return fmt.Errorf("not yet implemented")
 }
 
 // PrivateDataMinBlockNum returns the lowest retained endorsement block height
 func (l *kvLedger) PrivateDataMinBlockNum() (uint64, error) {
-	return 0, errors.New("not yet implemented")
+	return 0, fmt.Errorf("not yet implemented")
 }
 
 func (l *kvLedger) GetConfigHistoryRetriever() (ledger.ConfigHistoryRetriever, error) {
 	return l.configHistoryRetriever, nil
-}
-
-func (l *kvLedger) CommitPvtDataOfOldBlocks(pvtData []*ledger.BlockPvtData) ([]*ledger.PvtdataHashMismatch, error) {
-	logger.Debugf("[%s:] Comparing pvtData of [%d] old blocks against the hashes in transaction's rwset to find valid and invalid data",
-		l.ledgerID, len(pvtData))
-	validPvtData, hashMismatches, err := ConstructValidAndInvalidPvtData(pvtData, l.blockStore)
-	if err != nil {
-		return nil, err
-	}
-
-	logger.Debugf("[%s:] Committing pvtData of [%d] old blocks to the pvtdatastore", l.ledgerID, len(pvtData))
-	err = l.blockStore.CommitPvtDataOfOldBlocks(validPvtData)
-	if err != nil {
-		return nil, err
-	}
-
-	logger.Debugf("[%s:] Committing pvtData of [%d] old blocks to the stateDB", l.ledgerID, len(pvtData))
-	err = l.txtmgmt.RemoveStaleAndCommitPvtDataOfOldBlocks(validPvtData)
-	if err != nil {
-		return nil, err
-	}
-
-	logger.Debugf("[%s:] Clearing the bookkeeping information from pvtdatastore", l.ledgerID)
-	if err := l.blockStore.ResetLastUpdatedOldBlocksList(); err != nil {
-		return nil, err
-	}
-
-	return hashMismatches, nil
-}
-
-func (l *kvLedger) GetMissingPvtDataTracker() (ledger.MissingPvtDataTracker, error) {
-	return l, nil
 }
 
 // Close closes `KVLedger`
@@ -457,18 +367,4 @@ func (itr *blocksItr) Next() (commonledger.QueryResult, error) {
 
 func (itr *blocksItr) Close() {
 	itr.blocksItr.Close()
-}
-
-type collectionInfoRetriever struct {
-	ledger       ledger.PeerLedger
-	infoProvider ledger.DeployedChaincodeInfoProvider
-}
-
-func (r *collectionInfoRetriever) CollectionInfo(chaincodeName, collectionName string) (*common.StaticCollectionConfig, error) {
-	qe, err := r.ledger.NewQueryExecutor()
-	if err != nil {
-		return nil, err
-	}
-	defer qe.Done()
-	return r.infoProvider.CollectionInfo(chaincodeName, collectionName, qe)
 }

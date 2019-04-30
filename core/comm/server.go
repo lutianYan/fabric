@@ -15,7 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/grpc-ecosystem/go-grpc-middleware"
 	"google.golang.org/grpc"
 )
 
@@ -66,13 +65,10 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 
 	//set up our server options
 	var serverOpts []grpc.ServerOption
-
 	//check SecOpts
-	var secureConfig SecureOptions
-	if serverConfig.SecOpts != nil {
-		secureConfig = *serverConfig.SecOpts
-	}
-	if secureConfig.UseTLS {
+	secureConfig := serverConfig.SecOpts
+	//根据服务器配置serverConfig.SecOpts设置grpcServer对象的属性，包括TLS使能位标识符,服务器证书、服务器选项（封装发送消息的最大和最小字节数、服务器端传输层证书）
+	if secureConfig != nil && secureConfig.UseTLS {
 		//both key and cert are required
 		if secureConfig.Key != nil && secureConfig.Certificate != nil {
 			//load server public and private keys
@@ -92,7 +88,6 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 			}
 			//base server certificate
 			grpcServer.tlsConfig = &tls.Config{
-				VerifyPeerCertificate:  secureConfig.VerifyCertificate,
 				GetCertificate:         getCert,
 				SessionTicketsDisabled: true,
 				CipherSuites:           secureConfig.CipherSuites,
@@ -116,10 +111,11 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 			}
 
 			// create credentials and add to server options
-			creds := NewServerTransportCredentials(grpcServer.tlsConfig, serverConfig.Logger)
+			creds := NewServerTransportCredentials(grpcServer.tlsConfig)
 			serverOpts = append(serverOpts, grpc.Creds(creds))
 		} else {
-			return nil, errors.New("serverConfig.SecOpts must contain both Key and Certificate when UseTLS is true")
+			return nil, errors.New("serverConfig.SecOpts must contain both Key and " +
+				"Certificate when UseTLS is true")
 		}
 	}
 	// set max send and recv msg sizes
@@ -134,27 +130,10 @@ func NewGRPCServerFromListener(listener net.Listener, serverConfig ServerConfig)
 	serverOpts = append(
 		serverOpts,
 		grpc.ConnectionTimeout(serverConfig.ConnectionTimeout))
-	// set the interceptors
-	if len(serverConfig.StreamInterceptors) > 0 {
-		serverOpts = append(
-			serverOpts,
-			grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(serverConfig.StreamInterceptors...)),
-		)
-	}
-	if len(serverConfig.UnaryInterceptors) > 0 {
-		serverOpts = append(
-			serverOpts,
-			grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(serverConfig.UnaryInterceptors...)),
-		)
-	}
 
-	if serverConfig.MetricsProvider != nil {
-		sh := NewServerStatsHandler(serverConfig.MetricsProvider)
-		serverOpts = append(serverOpts, grpc.StatsHandler(sh))
-	}
-
+	//创建grpcServer绑定的grpc服务器server对象
 	grpcServer.server = grpc.NewServer(serverOpts...)
-
+	//返回该grpc服务器对象
 	return grpcServer, nil
 }
 

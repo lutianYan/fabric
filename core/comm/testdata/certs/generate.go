@@ -31,7 +31,6 @@ import (
 	"flag"
 	"fmt"
 	"math/big"
-	"net"
 	"os"
 	"time"
 )
@@ -135,11 +134,10 @@ func genServerCertificateECDSA(name string, signKey *ecdsa.PrivateKey, signCert 
 	//set the organization for the subject
 	subject := subjectTemplate()
 	subject.Organization = []string{name}
+	//hardcode to localhost for hostname verification
 	subject.CommonName = "localhost"
 
 	template.Subject = subject
-	template.DNSNames = []string{"localhost"}
-	template.IPAddresses = []net.IP{net.ParseIP("127.0.0.1")}
 
 	_, err = genCertificateECDSA(name, &template, signCert, &key.PublicKey, signKey)
 

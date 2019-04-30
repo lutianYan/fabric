@@ -34,6 +34,8 @@ import (
 // were to be applied to the db
 //
 // This can be used to perfrom validation for phantom reads in a transactions rwset
+//联合迭代器，这个联合迭代器供rangeQueryValidator管理使用
+//联合迭代器联合的就是以updates为数据源生成的迭代器A，state数据库为数据源生成的迭代器B
 type combinedIterator struct {
 	// input
 	ns            string
@@ -120,11 +122,6 @@ func (itr *combinedIterator) Next() (statedb.QueryResult, error) {
 
 func (itr *combinedIterator) Close() {
 	itr.dbItr.Close()
-}
-
-func (itr *combinedIterator) GetBookmarkAndClose() string {
-	itr.Close()
-	return ""
 }
 
 // serveEndKeyIfNeeded returns the endKey only once and only if includeEndKey was set to true

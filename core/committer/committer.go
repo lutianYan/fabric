@@ -25,6 +25,7 @@ import (
 // The only committer is noopssinglechain committer.
 // The interface is intentionally sparse with the sole
 // aim of "leave-everything-to-the-committer-for-now".
+//把所有的事情交给committer
 // As we solidify the bootstrap process and as we add
 // more support (such as Gossip) this interface will
 // change
@@ -50,15 +51,6 @@ type Committer interface {
 
 	// GetConfigHistoryRetriever returns the ConfigHistoryRetriever
 	GetConfigHistoryRetriever() (ledger.ConfigHistoryRetriever, error)
-
-	// CommitPvtDataOfOldBlocks commits the private data corresponding to already committed block
-	// If hashes for some of the private data supplied in this function does not match
-	// the corresponding hash present in the block, the unmatched private data is not
-	// committed and instead the mismatch inforation is returned back
-	CommitPvtDataOfOldBlocks(blockPvtData []*ledger.BlockPvtData) ([]*ledger.PvtdataHashMismatch, error)
-
-	// GetMissingPvtDataTracker return the MissingPvtDataTracker
-	GetMissingPvtDataTracker() (ledger.MissingPvtDataTracker, error)
 
 	// Closes committing service
 	Close()

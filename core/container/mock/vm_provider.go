@@ -2,31 +2,29 @@
 package mock
 
 import (
-	sync "sync"
+	"sync"
 
-	container "github.com/hyperledger/fabric/core/container"
+	container_test "github.com/hyperledger/fabric/core/container"
 )
 
 type VMProvider struct {
-	NewVMStub        func() container.VM
+	NewVMStub        func() container_test.VM
 	newVMMutex       sync.RWMutex
-	newVMArgsForCall []struct {
-	}
-	newVMReturns struct {
-		result1 container.VM
+	newVMArgsForCall []struct{}
+	newVMReturns     struct {
+		result1 container_test.VM
 	}
 	newVMReturnsOnCall map[int]struct {
-		result1 container.VM
+		result1 container_test.VM
 	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *VMProvider) NewVM() container.VM {
+func (fake *VMProvider) NewVM() container_test.VM {
 	fake.newVMMutex.Lock()
 	ret, specificReturn := fake.newVMReturnsOnCall[len(fake.newVMArgsForCall)]
-	fake.newVMArgsForCall = append(fake.newVMArgsForCall, struct {
-	}{})
+	fake.newVMArgsForCall = append(fake.newVMArgsForCall, struct{}{})
 	fake.recordInvocation("NewVM", []interface{}{})
 	fake.newVMMutex.Unlock()
 	if fake.NewVMStub != nil {
@@ -35,8 +33,7 @@ func (fake *VMProvider) NewVM() container.VM {
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.newVMReturns
-	return fakeReturns.result1
+	return fake.newVMReturns.result1
 }
 
 func (fake *VMProvider) NewVMCallCount() int {
@@ -45,32 +42,22 @@ func (fake *VMProvider) NewVMCallCount() int {
 	return len(fake.newVMArgsForCall)
 }
 
-func (fake *VMProvider) NewVMCalls(stub func() container.VM) {
-	fake.newVMMutex.Lock()
-	defer fake.newVMMutex.Unlock()
-	fake.NewVMStub = stub
-}
-
-func (fake *VMProvider) NewVMReturns(result1 container.VM) {
-	fake.newVMMutex.Lock()
-	defer fake.newVMMutex.Unlock()
+func (fake *VMProvider) NewVMReturns(result1 container_test.VM) {
 	fake.NewVMStub = nil
 	fake.newVMReturns = struct {
-		result1 container.VM
+		result1 container_test.VM
 	}{result1}
 }
 
-func (fake *VMProvider) NewVMReturnsOnCall(i int, result1 container.VM) {
-	fake.newVMMutex.Lock()
-	defer fake.newVMMutex.Unlock()
+func (fake *VMProvider) NewVMReturnsOnCall(i int, result1 container_test.VM) {
 	fake.NewVMStub = nil
 	if fake.newVMReturnsOnCall == nil {
 		fake.newVMReturnsOnCall = make(map[int]struct {
-			result1 container.VM
+			result1 container_test.VM
 		})
 	}
 	fake.newVMReturnsOnCall[i] = struct {
-		result1 container.VM
+		result1 container_test.VM
 	}{result1}
 }
 

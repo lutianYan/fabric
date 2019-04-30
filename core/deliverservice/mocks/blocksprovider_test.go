@@ -17,8 +17,8 @@ limitations under the License.
 package mocks
 
 import (
-	"context"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +28,7 @@ import (
 	proto "github.com/hyperledger/fabric/protos/gossip"
 	"github.com/hyperledger/fabric/protos/orderer"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/net/context"
 )
 
 func TestMockBlocksDeliverer(t *testing.T) {
@@ -99,7 +100,7 @@ func TestMockGossipServiceAdapter(t *testing.T) {
 
 	// Test AddPayload
 	gsa.AddPayload("TEST", msg.GetDataMsg().Payload)
-	assert.Equal(t, int32(1), gsa.(*MockGossipServiceAdapter).AddPayloadCount())
+	assert.Equal(t, int32(1), atomic.LoadInt32(&(gsa.(*MockGossipServiceAdapter).AddPayloadsCnt)))
 
 	// Test PeersOfChannel
 	assert.Len(t, gsa.PeersOfChannel(nil), 0)

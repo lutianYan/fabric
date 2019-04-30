@@ -37,12 +37,6 @@ type Capabilities interface {
 	// of transactions (as introduced in v1.2).
 	V1_2Validation() bool
 
-	// V1_3Validation returns true if this channel supports transaction validation
-	// as introduced in v1.3. This includes:
-	//  - policies expressible at a ledger key granularity, as described in FAB-8812
-	//  - new chaincode lifecycle, as described in FAB-11237
-	V1_3Validation() bool
-
 	// MetadataLifecycle indicates whether the peer should use the deprecated and problematic
 	// v1.0/v1.1 lifecycle, or whether it should use the newer per channel peer local chaincode
 	// metadata package approach planned for release with Fabric v1.2
@@ -51,7 +45,4 @@ type Capabilities interface {
 	// KeyLevelEndorsement returns true if this channel supports endorsement
 	// policies expressible at a ledger key granularity, as described in FAB-8812
 	KeyLevelEndorsement() bool
-
-	// FabToken returns true if fabric token function is supported.
-	FabToken() bool
 }
